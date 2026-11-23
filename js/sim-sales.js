@@ -373,7 +373,7 @@ function createVisit(c, source, opt = {}) {
     serious: clamp(gauss(source === 'internet' ? 0.56 : 0.64, 0.2) + (opt.serious || 0), 0.08, 1),
     targetPmt: roundTo(c.budget * randf(0.92, 1.06), 10), trade: null, fairNoise: gauss(0, 0.008), rounds: 0,
     mood: Math.round(clamp(gauss(66, 8), 35, 92)), patience: randi(3, 5) + (c.style === 'easygoing' ? 1 : 0), boost: 0,
-    td: false, to: false, appraised: false, state: 'waiting', log: [], counter: null, vip: !!opt.vip, note: opt.note || '',
+    td: false, to: false, appraised: false, state: 'waiting', log: [], counter: null, vip: !!opt.vip, note: opt.note || '', shown: !!opt.shown,
   };
   if (c.veh && chance(0.82)) v.trade = buildTrade(c);
   if (c.veh && c.veh.fromUs) v.serious = clamp(v.serious + 0.08 + c.dealerLoy * 0.1, 0, 1);

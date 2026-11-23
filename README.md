@@ -13,6 +13,8 @@ python3 -m http.server 8000
 # then open http://localhost:8000
 ```
 
+Time runs on its own from the moment you start: each business day goes from 9 AM to 8 PM, customers walk in as the clock moves, and the day closes out at 8. Pause or switch between three speeds at the top (space bar pauses, 1–3 set the speed). Decisions, the month-end report, the deal desk and other windows pause the clock and it resumes when you close them. The calendar button skips ahead a day, a week or to month-end.
+
 The game saves automatically in your browser (IndexedDB) at the end of each week, at month-end and when you leave the page. Use **New game** in the sidebar to start over.
 
 To produce a single self-contained HTML file:
@@ -31,7 +33,7 @@ node tools/build.mjs        # writes dist/dealer-empire.html
 6. **Retention** — measured by ownership-year cohorts. Programs (reminders, free first oil change, prepaid maintenance, loyalty points, pickup & delivery, extended hours, mobile service, preferred pricing) each carry a real monthly cost and an attributed return.
 7. **Monthly results** — a full income statement by department, operating expenses, cash flow and an Aurex evaluation that moves your standing, allocation and stair-step bonus.
 
-Important events interrupt time: resignation threats, recon surprises, fleet inquiries, competitor campaigns, recalls, OEM offers, customer complaints and the month-end close.
+Important events pause the clock: resignation threats, recon surprises, fleet inquiries, competitor campaigns, recalls, OEM offers, customer complaints and the month-end close.
 
 ## Sections
 

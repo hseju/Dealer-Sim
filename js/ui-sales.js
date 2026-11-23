@@ -22,7 +22,7 @@ function paceFactor() { const dom = dparts(S.day).dom, dim = daysInMonthOf(S.day
 
 function computeAlerts() {
   const a = [];
-  const waiting = S.showroom.filter(v => v.state === 'waiting' || v.state === 'negotiating');
+  const waiting = visibleVisits();
   const cap = sum(present('sales'), e => e.skill > 72 ? 5 : 4) + (present('gsm').length ? 2 : 0);
   if (waiting.length) a.push({ tone: waiting.length > cap ? 'bad' : 'info', icon: 'showroom', text: `${plural(waiting.length, 'customer')} waiting in showroom`, sub: waiting.length > cap ? `The sales team can only take ${cap} today. Work some deals yourself or hire.` : 'Work a deal yourself or let the team handle them at close.', link: 'showroom' });
   if (S.decisions.length) a.push({ tone: 'warn', icon: 'flag', text: `${plural(S.decisions.length, 'decision')} waiting for you`, sub: S.decisions[0].title, act: 'openDecision' });
@@ -60,7 +60,7 @@ VIEWS.dashboard = function () {
   const intro = S.flags.intro ? `<section class="intro">
     <div class="intro-text"><h2>Welcome, General Manager</h2>
       <p>You now run ${esc(S.dealerName)}: ${S.inv.filter(v => v.status === 'available').length} new units on the ground, ${S.used.length} used, ${S.emps.filter(e => e.status !== 'gone').length} staff and ${num(S.customers.length)} customers on file. The previous GM lost money three months running; Aurex expects ${t} new sales this month.</p>
-      <ol class="steps"><li><b>Stock the lot.</b> ${S.inv.filter(v => v.status === 'available').length} new units won't last a month. ${btnLink('Order from Aurex', 'openOrder')}</li><li><b>Work deals.</b> Customers are already waiting in the ${btnLink('showroom', 'go', 'showroom')}.</li><li><b>Keep them for life.</b> Service retention drives long-term profit. See ${btnLink('Retention', 'go', 'retention')}.</li><li><b>Move time</b> with the controls at the top. Decisions pause the clock.</li></ol></div>
+      <ol class="steps"><li><b>Stock the lot.</b> ${S.inv.filter(v => v.status === 'available').length} new units won't last a month. ${btnLink('Order from Aurex', 'openOrder')}</li><li><b>Work deals.</b> Customers walk into the ${btnLink('showroom', 'go', 'showroom')} through the day. Take the ones you want; your team handles the rest at closing.</li><li><b>Keep them for life.</b> Service retention drives long-term profit. See ${btnLink('Retention', 'go', 'retention')}.</li><li><b>The clock is running.</b> Customers walk in through the day. Change speed or pause at the top; decisions and the deal desk pause it for you.</li></ol></div>
     <button class="btn ghost sm" data-act="dismissIntro" type="button">${icon('x')}<span>Dismiss</span></button></section>` : '';
   const kp = [
     kpi('Cash', money(S.cash), `Credit line ${moneyK(CREDIT_LINE)} available`, { tone: S.cash < 250000 ? 'bad' : '', spark: sparkline(dailyCash), link: 'finance' }),
@@ -99,8 +99,8 @@ VIEWS.dashboard = function () {
   const paceChart = lineChart([{ name: 'New units delivered', values: cum, color: '--series-1', area: true }, { name: 'Target pace', values: tgt, color: '--fg-3', dash: true }], labels, { fmt: v => num(v), label: 'Sales pace vs target', maxLabels: 8 });
   const deptItems = DEPTS.map(d => ({ label: d.label, value: stDeptGross(m.L, d.id) })).filter(x => x.value !== 0);
   // showroom & service glance
-  const sr = S.showroom.filter(v => v.state === 'waiting' || v.state === 'negotiating').slice(0, 5);
-  const srHtml = sr.length ? `<ul class="mini-list">${sr.map(v => { const c = cust(v.cid); return `<li><span><b>${esc(fullName(c))}</b><small>${esc(srcLabel(v.source))} · ${esc(CLS_LABEL[c.wantCls])} · ${v.time}</small></span>${btn('Work deal', 'negotiate', { id: v.id }, { cls: 'sm' })}</li>`; }).join('')}</ul>` : empty(dparts(S.day).dow === 0 ? 'Closed Sunday.' : 'No one waiting right now.');
+  const sr = visibleVisits().slice(0, 5);
+  const srHtml = sr.length ? `<ul class="mini-list">${sr.map(v => { const c = cust(v.cid); return `<li><span><b>${esc(fullName(c))}</b><small>${esc(srcLabel(v.source))} · ${esc(CLS_LABEL[c.wantCls])} · ${v.time}</small></span>${btn('Work deal', 'negotiate', { id: v.id }, { cls: 'sm' })}</li>`; }).join('')}</ul>` : empty(dparts(S.day).dow === 0 ? 'Closed Sunday.' : 'No one waiting right now. Customers arrive through the day.');
   const ros = S.svc.ros, working = ros.filter(r => r.status === 'working').length;
   const svcHtml = `<div class="glance">
      <div><span class="muted">Open ROs</span><b>${ros.filter(r => r.pay !== 'internal').length}</b></div>
@@ -130,7 +130,8 @@ function btnLink(label, act, to) { return `<a href="#" class="ilink" data-act="$
 /* ---------------- Showroom ---------------- */
 VIEWS.showroom = function () {
   const L = S.fin.mtd;
-  const waiting = S.showroom.filter(v => v.state === 'waiting' || v.state === 'negotiating');
+  const waiting = visibleVisits();
+  const expected = S.showroom.filter(v => !v.shown).length;
   const team = present('sales');
   const cap = sum(team, e => e.skill > 72 ? 5 : 4) + (present('gsm').length ? 2 : 0);
   const close = L.ups ? L.sold / L.ups : 0;
@@ -143,7 +144,7 @@ VIEWS.showroom = function () {
     kpi('Walked unattended', L.unattended, 'This month', { tone: L.unattended > 5 ? 'warn' : '' }),
     kpi('Follow-up leads', leads, `${booked} appointments booked`),
   ].join('');
-  const cards = waiting.length ? waiting.map(v => visitorCard(v)).join('') : empty(dparts(S.day).dow === 0 ? 'The showroom is closed on Sundays. Advance the day.' : 'No customers waiting. More will arrive tomorrow — advertising, reputation and inventory drive traffic.', 'showroom');
+  const cards = waiting.length ? waiting.map(v => visitorCard(v)).join('') : empty(dparts(S.day).dow === 0 ? 'The showroom is closed on Sundays.' : expected ? 'No one waiting right now. More customers will walk in as the day goes on.' : 'No more customers today. Advertising, reputation and inventory drive tomorrow\'s traffic.', 'showroom');
   const desk = S.settings.desk;
   const policy = `<div class="form">
     <label class="fl"><span>Pricing stance</span>${seg('desk.stance', [['hold', 'Hold gross', 'Start at sticker and concede slowly. Higher gross, fewer deals.'], ['market', 'Market', 'Price to market. Balanced.'], ['aggressive', 'Aggressive', 'Undercut market. More deals, thin gross.']], desk.stance)}</label>

@@ -533,7 +533,7 @@ function scheduledVisits() {
     if (sunday) { c.inMarket.visit = S.day + 1; continue; }
     c.inMarket.visit = null;
     const v = createVisit(c, c.inMarket.src || 'repeat', { serious: 0.12 });
-    if (c.veh && c.veh.fromUs && c.ltv > 6000 && c.dealerLoy > 0.45 && chance(0.12) && !S.decisions.some(d => d.type === 'vip')) { v.vip = true; queueDecision('vip', { vid: v.id }); }
+    if (c.veh && c.veh.fromUs && c.ltv > 6000 && c.dealerLoy > 0.45 && chance(0.12) && !S.decisions.some(d => d.type === 'vip')) { v.vip = true; v.time = '9:05'; v.shown = true; queueDecision('vip', { vid: v.id }); }
   }
 }
 function endOfDay() {
