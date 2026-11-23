@@ -11,7 +11,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const out = process.argv[2] || join(root, 'dist');
 mkdirSync(out, { recursive: true });
 const html = readFileSync(join(root, 'index.html'), 'utf8');
-const css = readFileSync(join(root, 'css/styles.css'), 'utf8');
+const css = [...html.matchAll(/<link rel="stylesheet" href="(css\/[^"]+)">/g)].map(m => readFileSync(join(root, m[1]), 'utf8')).join('\n');
 const localScripts = [...html.matchAll(/<script src="(js\/[^"]+)"><\/script>/g)].map(m => m[1]);
 const cdnScripts = [...html.matchAll(/<script src="(https:[^"]+)"><\/script>/g)].map(m => m[0]);
 const js = localScripts.map(p => `/* ${p} */\n` + readFileSync(join(root, p), 'utf8')).join('\n');

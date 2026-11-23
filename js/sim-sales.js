@@ -105,6 +105,7 @@ function incentiveFor(v) {
 }
 function residualPct(v, term) {
   const m = MODEL[v.modelId];
+  if (!m) return 0.42; // used vehicles are not leased; a placeholder keeps the maths finite
   return clamp(m.resid + (36 - term) / 12 * 0.06 + (m.pt === 'ev' ? (S.mkt.ev - 1) * 0.1 : 0), 0.3, 0.75);
 }
 
@@ -507,7 +508,7 @@ function finalizeSale(visit, d, empId, how) {
   S.cash += r.accT - r.accC; book('acc', r.accT, r.accC);
   S.cash += r.prodT - r.prodC + r.reserve; book('fi', r.prodT + r.reserve, r.prodC);
   if (d.type !== 'cash') { L.fiDeals++; L.products += d.prod.length; }
-  L.sold++;
+  L.sold++; S.flags.totalSold = (S.flags.totalSold || 0) + 1;
   // commissions
   const fi = present('fi')[0];
   let comm = 0;
@@ -656,6 +657,7 @@ function orderVehicles(modelId, ti, color, qty) {
     S.inv.push(makeNewVehicle(modelId, { trim: ti, color: color === 'any' ? null : color, transit: true, eta, arrived: eta }));
   }
   if (m.exclusive) S.oem.exclusiveAlloc -= qty; else S.oem.ordered += qty;
+  S.flags.ordered = (S.flags.ordered || 0) + qty;
   logEvent('info', 'oem', `Ordered ${qty} × ${m.name} ${m.trims[ti].n} from Aurex.`);
   return true;
 }

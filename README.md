@@ -1,6 +1,8 @@
 # Dealer Empire
 
-A browser-based dealership management simulation. You are the General Manager of **Lakeshore Aurex**, a franchised dealer for the fictional Aurex brand, and you run every department: new and used vehicles, F&I, service, parts, people, finance, the manufacturer relationship and long-term customer retention.
+A browser-based dealership sim. You are the General Manager of a franchised dealer for the fictional Aurex brand, and you run every department: new and used vehicles, F&I, service, parts, people, finance, the manufacturer relationship and long-term customer retention.
+
+The game is played on an animated isometric view of your dealership. Every car on the lot is a real unit of inventory, every person in the showroom is a real customer, and every car on a lift is a real repair order. Click a customer to sell to them face to face, click a car or a building to manage it, and open any department from the toolbar.
 
 All brands, models, people and companies in the game are fictional.
 
@@ -13,9 +15,9 @@ python3 -m http.server 8000
 # then open http://localhost:8000
 ```
 
-Time runs on its own from the moment you start: each business day goes from 9 AM to 8 PM, customers walk in as the clock moves, and the day closes out at 8. Pause or switch between three speeds at the top (space bar pauses, 1–3 set the speed). Decisions, the month-end report, the deal desk and other windows pause the clock and it resumes when you close them. The calendar button skips ahead a day, a week or to month-end.
+Start from the title screen: open a new dealership (name, sign colour, difficulty, save slot) or continue a saved one. Days play out in the world — customers walk in, cars are delivered and driven away, the shop works through its repair orders, and the light changes toward closing time. Pause or pick a speed at the top right (space bar pauses, 1–3 set the speed); decisions, month-end results and conversations pause the game until you deal with them. The calendar button skips ahead a day, a week or to month-end. Twelve career goals guide you from stocking the lot to running a dealer group.
 
-The game saves automatically in your browser (IndexedDB) at the end of each week, at month-end and when you leave the page. Use **New game** in the sidebar to start over.
+The game saves to one of three slots in your browser (IndexedDB) every week, at month-end, after decisions and when you leave the page.
 
 To produce a single self-contained HTML file:
 
@@ -35,11 +37,11 @@ node tools/build.mjs        # writes dist/dealer-empire.html
 
 Important events pause the clock: resignation threats, recon surprises, fleet inquiries, competitor campaigns, recalls, OEM offers, customer complaints and the month-end close.
 
-## Sections
+## Department windows
 
-| Section | What you manage |
+| Window | What you manage |
 |---|---|
-| Dashboard | Executive KPIs, urgent issues, today's events, sales pace |
+| GM Office | Executive KPIs, urgent issues, today's events, sales pace |
 | Showroom | Waiting customers, the deal desk, desk policy, sales team, recent deals |
 | Vehicle Inventory | New units, aging, floorplan, model mix, ordering, dealer trades |
 | Used Vehicles | Trade-in disposition (recon, retail as-is, wholesale, auction), pricing, auction buying |
@@ -64,5 +66,10 @@ Plain classic scripts sharing one global scope, loaded in order by `index.html`:
 - `js/sim-service.js` — scheduling, repair orders, technicians, parts
 - `js/sim-people.js` — customer lifecycle, retention, employees
 - `js/sim-world.js` — market events, competitors, OEM, finance, decisions, the daily tick
-- `js/ui-*.js`, `js/main.js` — views, charts, input handling, saves
-- `css/styles.css` — theme tokens (light and dark) and layout
+- `js/world.js` — the isometric dealership: drawing, animation, camera, clicking
+- `js/art.js` — character looks and expressive portraits
+- `js/ui-deal.js` — the face-to-face deal scene
+- `js/ui-*.js` — management windows and charts
+- `js/main.js` — title screen, save slots, HUD, toolbar, goals, time, input
+- `css/styles.css` — theme tokens (light and dark) and window layout
+- `css/game.css` — HUD, toolbar, title screen and deal scene

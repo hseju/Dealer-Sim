@@ -1,108 +1,266 @@
 'use strict';
 /* =====================================================================
-   Dealer Empire — shell, routing, input handling, time controls, saves
+   Dealer Empire — game shell: title screen, save slots, HUD, toolbar,
+   management windows, goals, time, input handling.
    ===================================================================== */
 
-const NAV = [
-  ['Overview', [['dashboard', 'Dashboard', 'dashboard']]],
-  ['Sales', [['showroom', 'Showroom', 'showroom'], ['inventory', 'Vehicle Inventory', 'car'], ['used', 'Used Vehicles', 'used'], ['customers', 'Customers', 'customers']]],
-  ['Fixed operations', [['service', 'Service', 'service'], ['parts', 'Parts', 'parts'], ['retention', 'Retention', 'retention']]],
-  ['Management', [['employees', 'Employees', 'employees'], ['finance', 'Finance', 'finance'], ['oem', 'OEM', 'oem'], ['market', 'Market', 'market'], ['group', 'Dealer Group', 'group']]],
+const PANELS = {
+  dashboard: ['GM Office', 'dashboard'], showroom: ['Showroom', 'showroom'], inventory: ['New Cars', 'car'], used: ['Pre-Owned', 'used'],
+  customers: ['Customers', 'customers'], service: ['Service', 'service'], parts: ['Parts', 'parts'], retention: ['Loyalty', 'retention'],
+  employees: ['Staff', 'employees'], finance: ['Finance', 'finance'], oem: ['Aurex', 'oem'], market: ['Market', 'market'], group: ['Empire', 'group'],
+};
+const TITLES = Object.fromEntries(Object.entries(PANELS).map(([k, v]) => [k, v[0]]));
+const LEGACY_KEY = 'dealer-empire-save-v3';
+const SIGN_COLORS = [['#0a7480', 'Teal'], ['#b3332c', 'Red'], ['#2556a3', 'Blue'], ['#c47f12', 'Amber'], ['#2f3a45', 'Graphite']];
+
+/* ---------- Goals: the career ---------- */
+const GOALS = [
+  { id: 'order', title: 'Stock the lot', desc: 'Order 10 new vehicles from Aurex.', reward: 10000, done: () => (S.flags.ordered || 0) >= 10, prog: () => [(S.flags.ordered || 0), 10] },
+  { id: 'deal', title: 'Close your first deal', desc: 'Click a customer in the showroom and sell them a car yourself.', reward: 15000, done: () => S.deals.some(d => d.by === 'You') },
+  { id: 'team', title: 'Grow the team', desc: 'Hire someone new. A BDC agent pays for itself in retention.', reward: 10000, done: () => S.emps.some(e => e.hired >= 0 && e.status !== 'gone') },
+  { id: 'program', title: 'Keep them coming back', desc: 'Launch a customer loyalty program.', reward: 10000, done: () => Object.values(S.programs).some(Boolean) },
+  { id: 'sold25', title: 'Move the metal', desc: 'Sell 25 vehicles.', reward: 25000, done: () => (S.flags.totalSold || 0) >= 25, prog: () => [(S.flags.totalSold || 0), 25] },
+  { id: 'profit', title: 'Back in the black', desc: 'Finish a month with a net profit.', reward: 40000, done: () => S.fin.hist.some(h => !h.prior && statementNet(h) > 0) },
+  { id: 'target', title: 'Make Aurex happy', desc: 'Hit the monthly new-vehicle sales target.', reward: 50000, done: () => S.oem.hist.some(h => h.units >= h.target) },
+  { id: 'preferred', title: 'Preferred dealer', desc: 'Reach Preferred standing with Aurex (60+).', reward: 50000, done: () => S.oem.standing >= 60 && S.oem.hist.length > 0, prog: () => [S.oem.standing, 60] },
+  { id: 'retention', title: 'Customers for life', desc: 'Reach 65% owner retention.', reward: 60000, done: () => S.kpiCache.ret && S.kpiCache.ret.owner >= 0.65, prog: () => [Math.round((S.kpiCache.ret ? S.kpiCache.ret.owner : 0) * 100), 65] },
+  { id: 'expand', title: 'Build it bigger', desc: 'Open your first expansion project.', reward: 100000, done: () => S.exp.owned.length > 0 },
+  { id: 'million', title: 'Seven figures', desc: 'Earn $1,000,000 in total net profit.', reward: 150000, done: () => sum(S.fin.hist.filter(h => !h.prior), statementNet) >= 1e6, prog: () => [Math.round(sum(S.fin.hist.filter(h => !h.prior), statementNet) / 1000), 1000] },
+  { id: 'group', title: 'Dealer group', desc: 'Own a second rooftop.', reward: 250000, done: () => S.stores.length > 0 },
 ];
-const TITLES = Object.fromEntries(NAV.flatMap(g => g[1]).map(([k, l]) => [k, l]));
-const SAVE_KEY = 'dealer-empire-save-v3';
+function currentGoal() { S.flags.goals = S.flags.goals || []; return GOALS.find(g => !S.flags.goals.includes(g.id)); }
+function checkGoals() {
+  if (!S || UI.screen !== 'game') return;
+  S.flags.goals = S.flags.goals || [];
+  for (const g of GOALS) {
+    if (S.flags.goals.includes(g.id)) continue;
+    let ok = false; try { ok = g.done(); } catch (e) { ok = false; }
+    if (ok) {
+      S.flags.goals.push(g.id); S.cash += g.reward;
+      logEvent('good', 'gm', `Goal complete: ${g.title}. Aurex sends a ${money(g.reward)} performance grant.`);
+      UI.celebrate = { title: g.title, reward: g.reward, t: Date.now() };
+      setTimeout(() => { UI.celebrate = null; renderHud(); }, 4200);
+    }
+    break; // goals unlock in order
+  }
+}
 
 /* ---------- Shell ---------- */
 function buildShell() {
-  const root = document.getElementById('app');
-  root.innerHTML = `<div class="app" id="app-shell">
-    <aside class="nav" id="nav" aria-label="Main navigation"></aside>
-    <div class="nav-scrim" data-act="navToggle"></div>
-    <div class="main"><header class="top" id="top"></header><main class="view" id="view" tabindex="-1"></main></div>
-  </div><div id="overlay"></div><div id="drawer"></div><div id="toasts" aria-live="polite"></div><div id="tip" role="tooltip"></div>`;
+  document.getElementById('app').innerHTML = `<div class="game" id="game">
+    <canvas id="world" aria-label="Your dealership. Click customers, cars and buildings."></canvas>
+    <div class="hud" id="hud"></div>
+    <div id="pwin"></div>
+  </div><div id="title"></div><div id="overlay"></div><div id="drawer"></div><div id="toasts" aria-live="polite"></div><div id="tip" role="tooltip"></div>`;
 }
-function renderNav() {
-  const appr = S.used.filter(u => u.status === 'appraisal').length;
-  const waiting = visibleVisits().length;
-  const parts = S.svc.ros.filter(r => r.status === 'parts').length;
-  const risk = S.emps.filter(e => e.status !== 'gone' && e.morale < 38).length;
-  const badges = { showroom: waiting, used: appr, service: parts, employees: risk };
-  document.getElementById('nav').innerHTML = `
-    <div class="brand"><svg class="logo" viewBox="0 0 40 40" aria-hidden="true"><rect x="1" y="1" width="38" height="38" rx="9" class="logo-bg"/><path d="M9 27a11 11 0 1 1 22 0" class="logo-arc"/><path d="m20 27 6-8" class="logo-needle"/><circle cx="20" cy="27" r="2.2" class="logo-hub"/></svg>
-      <div><div class="brand-name">Dealer Empire</div><div class="brand-sub">${esc(S.dealerName)}</div></div></div>
-    <nav class="nav-groups">${NAV.map(([g, items]) => `<div class="nav-g"><div class="nav-gl">${g}</div>${items.map(([k, l, ic]) => `<a href="#${k}" class="nav-i ${UI.route === k ? 'on' : ''}" data-act="go" data-to="${k}" ${UI.route === k ? 'aria-current="page"' : ''}>${icon(ic)}<span>${l}</span>${badges[k] ? `<b class="nav-badge">${badges[k]}</b>` : ''}</a>`).join('')}</div>`).join('')}</nav>
-    <div class="nav-foot">
-      <button type="button" class="nav-i" data-act="theme">${icon(currentTheme() === 'dark' ? 'moon' : 'sun')}<span>Theme: ${{ system: 'System', light: 'Light', dark: 'Dark' }[UI.themePref || 'system']}</span></button>
-      <button type="button" class="nav-i" data-act="saveNow">${icon('save')}<span>Save game</span></button>
-      <button type="button" class="nav-i" data-act="openNewGame">${icon('refresh')}<span>New game</span></button>
-    </div>`;
+function sunArc() {
+  const t = clamp((S.clock || 0) / DAY_MIN, 0, 1), sunday = dparts(S.day).dow === 0;
+  const a = Math.PI * (1 - t), x = 30 + 24 * Math.cos(a), y = 26 - 20 * Math.sin(a);
+  return `<svg class="sunarc" viewBox="0 0 60 30" aria-hidden="true"><path d="M6 26 A24 20 0 0 1 54 26" fill="none" stroke="currentColor" stroke-opacity=".3" stroke-width="2" stroke-dasharray="2 3"/><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5" fill="${sunday ? '#9fb3c8' : t > 0.8 ? '#f08a4b' : '#f5c242'}"/></svg>`;
 }
-function renderTop() {
+function renderHud() {
+  const hud = document.getElementById('hud'); if (!hud || !S) return;
+  if (UI.screen !== 'game') { hud.innerHTML = ''; return; }
   const p = dparts(S.day), t = S.oem.targets.units;
+  const waiting = visibleVisits().length, appr = S.used.filter(u => u.status === 'appraisal').length;
+  const badges = { showroom: waiting, used: appr, service: S.svc.ros.filter(r => r.status === 'parts').length, employees: S.emps.filter(e => e.status !== 'gone' && e.morale < 38).length, retention: 0 };
   const blockedNow = !canAdvance();
-  const spd = (n, label) => `<button type="button" class="ck ${!UI.paused && UI.speed === n ? 'on' : ''}" data-act="speed" data-val="${n}" aria-label="Speed ${label}" data-tip="${label} speed — a business day takes ${SPEEDS[n] / 1000} s">${icon(n === 1 ? 'play' : 'week')}${n > 1 ? `<span>${n}×</span>` : ''}</button>`;
-  document.getElementById('top').innerHTML = `
-    <button class="icon-btn nav-toggle" data-act="navToggle" aria-label="Open navigation">${icon('menu')}</button>
-    <div class="top-title"><h1>${esc(TITLES[UI.route] || '')}</h1><div class="top-date"><b>${DOW_LONG[p.dow]}, ${MONTHS_LONG[p.m]} ${p.dom}, ${p.y}</b><span>Day ${S.day + 1}${p.dow === 0 ? ' · Closed' : ''}</span></div></div>
-    <div class="clockbox">
-      <div class="clock-face"><b id="clock-time">${clockLabel()}</b><small id="clock-state">${clockState()}</small><span class="clock-bar"><i id="clock-bar" style="width:${(Math.min(1, (S.clock || 0) / DAY_MIN) * 100).toFixed(1)}%"></i></span></div>
-      <div class="clock" role="group" aria-label="Time controls">
-        <button type="button" class="ck ${UI.paused ? 'on' : ''}" data-act="pause" aria-label="Pause" data-tip="Pause (space bar)">${icon('pause')}</button>
-        ${spd(1, 'Normal')}${spd(2, 'Fast')}${spd(3, 'Very fast')}
-        <details class="skip"><summary class="ck" data-tip="Skip ahead">${icon('month')}</summary><div class="skip-menu">
+  const g = currentGoal();
+  const gp = g && g.prog ? g.prog() : null;
+  const alerts = computeAlerts().filter(a => a.tone !== 'good' && !/OEM sales target/.test(a.text)).slice(0, 3);
+  const sb = (n, lab) => `<button type="button" class="sp ${!UI.paused && UI.speed === n ? 'on' : ''}" data-act="speed" data-val="${n}" aria-label="${lab}" data-tip="${lab}">${n === 1 ? icon('play') : `${icon('week')}<b>${n}</b>`}</button>`;
+  const wasOpen = [...hud.querySelectorAll('details')].map(d => d.open);
+  hud.innerHTML = `
+    <div class="hud-top">
+      <div class="hud-card hud-brand" data-act="go" data-to="dashboard" role="button" tabindex="0" data-tip="GM office">
+        <svg class="logo" viewBox="0 0 40 40" aria-hidden="true"><rect x="1" y="1" width="38" height="38" rx="9" fill="${S.color || '#0a7480'}"/><path d="M9 27a11 11 0 1 1 22 0" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="m20 27 6-8" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><circle cx="20" cy="27" r="2.2" fill="#fff"/></svg>
+        <div><b>${esc(S.dealerName)}</b><small>${DOW_LONG[p.dow]} · ${MONTHS[p.m]} ${p.dom}, ${p.y}${p.dow === 0 ? ' · closed' : ''}</small></div>${sunArc()}
+      </div>
+      <div class="hud-card hud-res">
+        <span class="res ${S.cash < 0 ? 'neg' : ''}" data-act="go" data-to="finance" role="button" tabindex="0" data-tip="Cash in the bank">${icon('dollar')}<b>${moneyK(S.cash)}</b></span>
+        <span class="res" data-act="go" data-to="finance" role="button" tabindex="0" data-tip="Gross profit this month">${icon('trendup')}<b>${moneyK(stGross(S.fin.mtd))}</b><small>this month</small></span>
+        <span class="res" data-act="go" data-to="oem" role="button" tabindex="0" data-tip="New cars sold vs the Aurex target this month">${icon('flag')}<b>${S.oem.mtdNew}/${t}</b><small>Aurex</small></span>
+        <span class="res" data-act="go" data-to="retention" role="button" tabindex="0" data-tip="Customer satisfaction, sales / service">${icon('star')}<b>${Math.round(kpiSalesCsi())}</b><small>CSI</small></span>
+      </div>
+      <div class="hud-card hud-time" role="group" aria-label="Game speed">
+        <button type="button" class="sp ${UI.paused ? 'on' : ''}" data-act="pause" aria-label="Pause" data-tip="Pause (space)">${icon('pause')}</button>${sb(1, 'Play')}${sb(2, 'Fast')}${sb(3, 'Fastest')}
+        <details class="skip"><summary class="sp" data-tip="Skip ahead">${icon('month')}</summary><div class="skip-menu">
           <button type="button" data-act="step1" ${blockedNow ? 'disabled' : ''}>Skip to tomorrow</button>
           <button type="button" data-act="step7" ${blockedNow ? 'disabled' : ''}>Skip a week</button>
           <button type="button" data-act="stepMonth" ${blockedNow ? 'disabled' : ''}>Skip to month-end</button></div></details>
+        <details class="skip"><summary class="sp" aria-label="Menu" data-tip="Menu">${icon('menu')}</summary><div class="skip-menu">
+          <button type="button" data-act="saveNow">${icon('save')} Save game</button>
+          <button type="button" data-act="toTitle">${icon('left')} Main menu</button>
+          <button type="button" data-act="recenter">${icon('search')} Re-center view</button>
+          <button type="button" data-act="theme">${icon(currentTheme() === 'dark' ? 'moon' : 'sun')} Window theme: ${{ system: 'System', light: 'Light', dark: 'Dark' }[UI.themePref || 'system']}</button></div></details>
       </div>
     </div>
-    <div class="top-stats">
-      <div class="ts ${S.cash < 0 ? 't-bad' : ''}" data-act="go" data-to="finance" role="button" tabindex="0"><small>Cash</small><b>${moneyK(S.cash)}</b></div>
-      <div class="ts" data-act="go" data-to="finance" role="button" tabindex="0"><small>MTD gross</small><b>${moneyK(stGross(S.fin.mtd))}</b></div>
-      <div class="ts" data-act="go" data-to="oem" role="button" tabindex="0"><small>Aurex target</small><b>${S.oem.mtdNew}/${t}</b></div>
-    </div>`;
+    ${UI.paused || !canRun() ? `<div class="paused-tag">${esc(pauseReason())}</div>` : ''}
+    ${UI.panel ? '' : `<div class="hud-left">
+      ${g ? `<div class="goal" data-act="go" data-to="dashboard" role="button" tabindex="0"><span class="goal-k">Goal ${S.flags.goals.length + 1} of ${GOALS.length}</span><b>${esc(g.title)}</b><small>${esc(g.desc)}</small>${gp ? bar(gp[0] / gp[1], 'accent') : ''}<span class="goal-r">Reward ${moneyK(g.reward)}</span></div>` : `<div class="goal"><span class="goal-k">Career</span><b>Every goal complete</b><small>You built a dealer group. Keep growing it.</small></div>`}
+    </div>
+    <div class="hud-right">${alerts.map(a => `<button type="button" class="note note-${a.tone}" ${a.link ? `data-act="go" data-to="${a.link}" ${a.filter ? `data-filter="${a.filter}"` : ''}` : `data-act="${a.act}"`}>${icon(a.icon)}<span>${esc(a.text)}</span></button>`).join('')}</div>`}
+    ${UI.celebrate ? `<div class="celebrate"><span>Goal complete</span><b>${esc(UI.celebrate.title)}</b><small>+${money(UI.celebrate.reward)} from Aurex</small></div>` : ''}
+    <nav class="toolbar" aria-label="Departments">${Object.entries(PANELS).map(([k, [lab, ic]]) => `<button type="button" class="tool ${UI.panel === k ? 'on' : ''}" data-act="go" data-to="${k}">${icon(ic)}<span>${lab}</span>${badges[k] ? `<b class="tool-badge">${badges[k]}</b>` : ''}</button>`).join('')}</nav>`;
+  hud.querySelectorAll('details').forEach((d, i) => { if (wasOpen[i]) d.open = true; });
+}
+function pauseReason() {
+  if (S.over) return 'Game over';
+  if (S.report) return 'Paused — month-end results';
+  if (S.decisions.length) return 'Paused — a decision needs you';
+  if (UI.modal === 'neg') return 'Paused — talking to a customer';
+  if (UI.modal) return 'Paused';
+  return 'Paused';
+}
+function openPanel(k) { if (!PANELS[k]) return; UI.panel = k; UI.route = k; UI.drawer = null; render(); }
+function renderPanel() {
+  const el = document.getElementById('pwin'); if (!el) return;
+  if (!UI.panel || UI.screen !== 'game') { el.innerHTML = ''; return; }
+  const [lab, ic] = PANELS[UI.panel];
+  const prev = el.querySelector('#view'); const st = prev && el.dataset.k === UI.panel ? prev.scrollTop : 0;
+  el.dataset.k = UI.panel;
+  el.innerHTML = `<div class="pwin-scrim" data-act="closePanel"></div><section class="pwin" role="dialog" aria-label="${esc(lab)}">
+    <header class="pwin-h"><span class="pwin-ic">${icon(ic)}</span><h2>${esc(lab)}</h2><span class="muted pwin-sub">${esc(S.dealerName)} · ${fmtDate(S.day)}</span><button type="button" class="icon-btn" data-act="closePanel" aria-label="Close window">${icon('x')}</button></header>
+    <div class="view" id="view"></div></section>`;
+  renderView();
+  const nv = el.querySelector('#view'); if (nv && st) nv.scrollTop = st;
 }
 function renderView() {
-  const el = document.getElementById('view');
-  const fn = VIEWS[UI.route] || VIEWS.dashboard;
-  try { el.innerHTML = fn(); }
-  catch (e) { console.error(e); el.innerHTML = panel('Something went wrong', `<p>${esc(e.message)}</p>`); }
+  const el = document.getElementById('view'); if (!el) return;
+  const fn = VIEWS[UI.panel] || VIEWS.dashboard;
+  try { el.innerHTML = fn(); } catch (e) { console.error(e); el.innerHTML = panel('Something went wrong', `<p>${esc(e.message)}</p>`); }
 }
 function renderOverlay() {
   const o = document.getElementById('overlay');
   let html = '', cls = '';
-  if (S.over) { html = gameOverModal(); cls = 'md'; }
-  else if (UI.modal === 'newgame') { html = newGameModal(); cls = 'sm'; }
-  else if (UI.modal === 'neg') { html = renderNegotiation(); cls = UI.neg && UI.neg.done ? 'lg' : 'xl neg-modal'; }
-  else if (S.report) { html = reportModal(); cls = 'lg'; }
-  else if (S.decisions.length) { html = decisionModal(); cls = 'md'; }
-  else if (UI.modal === 'order') { html = orderModal(); cls = 'lg'; }
-  else if (UI.modal === 'hire') { html = hireModal(); cls = 'lg'; }
-  else if (UI.modal && UI.modal.kind) { html = empModal(UI.modal.kind, UI.modal.id); cls = 'sm'; }
+  if (UI.screen === 'game') {
+    if (S.over) { html = gameOverModal(); cls = 'md'; }
+    else if (UI.modal === 'neg') { html = renderDealScene(); cls = 'scene-modal' + (UI.neg && UI.neg.done ? ' done' : ''); }
+    else if (S.report) { html = reportModal(); cls = 'lg'; }
+    else if (S.decisions.length) { html = decisionModal(); cls = 'md call'; }
+    else if (UI.modal === 'order') { html = orderModal(); cls = 'lg'; }
+    else if (UI.modal === 'hire') { html = hireModal(); cls = 'lg'; }
+    else if (UI.modal && UI.modal.kind) { html = empModal(UI.modal.kind, UI.modal.id); cls = 'sm'; }
+  }
+  const key = cls + (UI.modal && UI.modal.kind || UI.modal || '');
   const prev = o.querySelector('.modal');
-  const keepScroll = prev && prev.dataset.key === (cls + (UI.modal && UI.modal.kind || UI.modal || '')) ? prev.querySelector('.modal-b, .neg')?.scrollTop : 0;
-  o.innerHTML = html ? `<div class="scrim"></div><div class="modal ${cls}" role="dialog" aria-modal="true" data-key="${cls + (UI.modal && UI.modal.kind || UI.modal || '')}">${html}</div>` : '';
-  if (keepScroll) { const b = o.querySelector('.modal-b, .neg'); if (b) b.scrollTop = keepScroll; }
-  document.body.classList.toggle('has-modal', !!html);
+  const sc = prev && prev.dataset.key === key ? (prev.querySelector('.modal-b, .scene-desk') || {}).scrollTop : 0;
+  o.innerHTML = html ? `<div class="scrim"></div><div class="modal ${cls}" role="dialog" aria-modal="true" data-key="${key}">${html}</div>` : '';
+  if (sc) { const b = o.querySelector('.modal-b, .scene-desk'); if (b) b.scrollTop = sc; }
   const d = document.getElementById('drawer');
-  if (UI.drawer && !html) {
+  if (UI.drawer && !html && UI.screen === 'game') {
     const inner = UI.drawer.type === 'veh' ? vehDrawer(UI.drawer.id) : custDrawer(UI.drawer.id);
     const prevB = d.querySelector('.drawer-b'); const st = prevB && d.dataset.key === UI.drawer.type + UI.drawer.id ? prevB.scrollTop : 0;
-    d.innerHTML = inner ? `<div class="scrim" data-act="closeDrawer"></div><aside class="drawer" role="dialog" aria-modal="true">${inner}</aside>` : '';
+    d.innerHTML = inner ? `<div class="scrim light" data-act="closeDrawer"></div><aside class="drawer" role="dialog" aria-modal="true">${inner}</aside>` : '';
     d.dataset.key = UI.drawer.type + UI.drawer.id;
     const nb = d.querySelector('.drawer-b'); if (nb && st) nb.scrollTop = st;
   } else d.innerHTML = '';
 }
 function render() {
-  renderNav(); renderTop(); renderView(); renderOverlay(); renderToasts(); updateClockUI();
-  document.getElementById('app-shell').classList.toggle('nav-open', UI.navOpen);
+  renderTitle(); renderHud(); renderPanel(); renderOverlay(); renderToasts();
   if (UI.focus) { const el = document.getElementById(UI.focus); if (el) { el.focus(); if (el.setSelectionRange && el.type === 'search') { const n = el.value.length; el.setSelectionRange(n, n); } } UI.focus = null; }
 }
+function renderViewSafe() {
+  const a = document.activeElement;
+  if (a && a.closest && a.closest('#view') && a.matches('input, select, textarea')) { UI.viewDirty = true; return; }
+  UI.viewDirty = false; renderView();
+}
+
+/* ---------- Title screen & save slots ---------- */
+function slotSummary() { return { name: S.dealerName, day: S.day, cash: Math.round(S.cash), months: monthsPlayed(), color: S.color || '#0a7480', saved: Date.now() }; }
+function renderTitle() {
+  const el = document.getElementById('title'); if (!el) return;
+  if (UI.screen !== 'title') { el.innerHTML = ''; return; }
+  const meta = UI.meta || { slots: {} };
+  const act = meta.active && meta.slots[meta.active];
+  let body;
+  if (UI.titleView === 'new') {
+    const free = [1, 2, 3].find(n => !meta.slots[n]) || meta.active || 1;
+    body = `<form class="title-form" data-form="create">
+      <h2>Open a new dealership</h2>
+      <label class="fl"><span>Dealership name</span><input class="txt" name="name" id="ng-name" maxlength="28" value="Lakeshore Aurex" required></label>
+      <label class="fl"><span>Your name (general manager)</span><input class="txt" name="gm" id="ng-gm" maxlength="28" placeholder="Optional"></label>
+      <div class="fl"><span>Sign colour</span><div class="swatches">${SIGN_COLORS.map(([c, n], i) => `<label class="sw"><input type="radio" name="color" value="${c}" ${i === 0 ? 'checked' : ''}><i style="background:${c}"></i><span>${n}</span></label>`).join('')}</div></div>
+      <label class="fl"><span>Difficulty</span><select class="sel" name="difficulty" id="ng-diff"><option value="standard">Standard — start with $2,000,000</option><option value="hard">Challenging — start with $1,400,000</option></select></label>
+      <label class="fl"><span>Save slot</span><select class="sel" name="slot" id="ng-slot">${[1, 2, 3].map(n => `<option value="${n}" ${n === free ? 'selected' : ''}>Slot ${n}${meta.slots[n] ? ` — replaces ${esc(meta.slots[n].name)}` : ' — empty'}</option>`).join('')}</select></label>
+      <div class="title-actions"><button type="button" class="btn ghost" data-act="titleView" data-val="main">Back</button><button type="submit" class="btn primary big">${icon('key')}<span>Open for business</span></button></div>
+    </form>`;
+  } else if (UI.titleView === 'load') {
+    body = `<div class="title-form"><h2>Load a game</h2><div class="slots">${[1, 2, 3].map(n => { const s = meta.slots[n]; return s ? `<div class="slot"><i style="background:${s.color}"></i><div><b>${esc(s.name)}</b><small>${fmtDate(s.day)} · ${moneyK(s.cash)} · ${plural(s.months, 'month')} as GM</small></div><button type="button" class="btn primary sm" data-act="loadSlot" data-val="${n}">Play</button><button type="button" class="btn ghost sm" data-act="delSlot" data-val="${n}" aria-label="Delete slot ${n}">${icon('trash')}</button></div>` : `<div class="slot empty"><i></i><div><b>Slot ${n}</b><small>Empty</small></div></div>`; }).join('')}</div>
+      <div class="title-actions"><button type="button" class="btn ghost" data-act="titleView" data-val="main">Back</button></div></div>`;
+  } else {
+    body = `<div class="title-menu">
+      ${act ? `<button type="button" class="tbtn primary" data-act="loadSlot" data-val="${meta.active}"><b>Continue</b><small>${esc(act.name)} · ${fmtDate(act.day)} · ${moneyK(act.cash)}</small></button>` : ''}
+      <button type="button" class="tbtn ${act ? '' : 'primary'}" data-act="titleView" data-val="new"><b>New dealership</b><small>Take over a struggling Aurex store</small></button>
+      <button type="button" class="tbtn" data-act="titleView" data-val="load" ${Object.keys(meta.slots).length ? '' : 'disabled'}><b>Load game</b><small>${Object.keys(meta.slots).length} saved</small></button>
+    </div>`;
+  }
+  el.innerHTML = `<div class="title-screen"><div class="title-card">
+    <div class="title-logo"><svg viewBox="0 0 40 40" aria-hidden="true"><rect x="1" y="1" width="38" height="38" rx="9" fill="#0a7480"/><path d="M9 27a11 11 0 1 1 22 0" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="m20 27 6-8" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><circle cx="20" cy="27" r="2.2" fill="#fff"/></svg><div><h1>Dealer Empire</h1><p>Sell cars. Fix cars. Keep customers for life.</p></div></div>
+    ${body}
+    <p class="title-foot">Your games save in this browser.</p></div></div>`;
+}
+async function loadMeta() {
+  let meta = null;
+  try { meta = await idbGet('meta'); } catch (e) { meta = null; }
+  if (!meta) {
+    meta = { active: null, slots: {} };
+    let legacy = null;
+    try { legacy = await idbGet(LEGACY_KEY); } catch (e) { /* none */ }
+    if (!legacy) { try { const raw = localStorage.getItem(LEGACY_KEY); legacy = raw ? JSON.parse(raw) : null; } catch (e) { /* none */ } }
+    if (legacy && legacy.v === 3 && legacy.customers) {
+      const keep = S; S = legacy; meta.slots[1] = slotSummary(); meta.active = 1; S = keep;
+      try { await idbPut('slot1', legacy); await idbPut('meta', meta); } catch (e) { /* ignore */ }
+    }
+  }
+  UI.meta = meta;
+  return meta;
+}
+async function loadSlot(n) {
+  let s = null;
+  try { s = await idbGet('slot' + n); } catch (e) { s = null; }
+  if (!s) { toast('That save could not be read.', 'bad'); return; }
+  enterGame(s, n);
+}
+function prepareState() {
+  rebuildIndex(); MODS = null; refreshMods(); computeKpis();
+  if (S.clock == null) S.clock = 0;
+  if (!S.color) S.color = '#0a7480';
+  for (const v of S.showroom) if (v.shown == null) v.shown = arrMin(v.time) <= S.clock;
+}
+function enterGame(state, slot) {
+  S = state; prepareState();
+  UI.slot = slot; UI.meta.active = slot; UI.screen = 'game'; UI.panel = null; UI.modal = null; UI.drawer = null; UI.neg = null; UI.paused = false; UI.filters = {}; UI.page = {};
+  resetWorld(); fitCamera();
+  revealArrivals();
+  saveGame();
+  render();
+}
+function saveGame(manual) {
+  UI.daysSinceSave = 0;
+  if (UI.screen !== 'game' || !UI.slot) return;
+  const meta = UI.meta; meta.slots[UI.slot] = slotSummary(); meta.active = UI.slot;
+  const done = () => { if (manual) toast(`Saved to slot ${UI.slot}.`, 'good'); };
+  try { idbPut('slot' + UI.slot, S).then(() => idbPut('meta', meta)).then(done, () => { if (manual) toast('Saving failed — browser storage is unavailable or full.', 'bad'); }); }
+  catch (e) { if (manual) toast('Saving failed — browser storage is unavailable.', 'bad'); }
+}
+let _db = null;
+function idbOpen() {
+  if (_db) return Promise.resolve(_db);
+  return new Promise((res, rej) => {
+    try { const r = indexedDB.open('dealer-empire', 1); r.onupgradeneeded = () => r.result.createObjectStore('saves'); r.onsuccess = () => { _db = r.result; res(_db); }; r.onerror = () => rej(r.error); }
+    catch (e) { rej(e); }
+  });
+}
+function idbPut(key, val) { return idbOpen().then(db => new Promise((res, rej) => { const tx = db.transaction('saves', 'readwrite'); tx.objectStore('saves').put(val, key); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); })); }
+function idbGet(key) { return idbOpen().then(db => new Promise((res, rej) => { const rq = db.transaction('saves', 'readonly').objectStore('saves').get(key); rq.onsuccess = () => res(rq.result || null); rq.onerror = () => rej(rq.error); })); }
+function idbDel(key) { return idbOpen().then(db => new Promise((res, rej) => { const tx = db.transaction('saves', 'readwrite'); tx.objectStore('saves').delete(key); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); })); }
 
 /* ---------- Toasts & tooltips ---------- */
 function toast(msg, t = 'info', action) {
   const id = Math.random().toString(36).slice(2);
   UI.toasts.push({ id, msg, t, action });
-  if (UI.toasts.length > 4) UI.toasts.shift();
+  if (UI.toasts.length > 3) UI.toasts.shift();
   renderToasts();
   setTimeout(() => { UI.toasts = UI.toasts.filter(x => x.id !== id); renderToasts(); }, 4200);
   return false;
@@ -115,6 +273,7 @@ function initTooltips() {
   const tip = document.getElementById('tip');
   let cur = null;
   document.addEventListener('mouseover', e => {
+    if (e.target.id === 'world') return;
     const el = e.target.closest('[data-tip]');
     if (el === cur) return;
     cur = el;
@@ -122,7 +281,7 @@ function initTooltips() {
     tip.innerHTML = el.dataset.tip; tip.classList.add('on');
   });
   document.addEventListener('mousemove', e => {
-    if (!cur) return;
+    if (!cur || e.target.id === 'world') return;
     const w = tip.offsetWidth, h = tip.offsetHeight;
     let x = e.clientX + 14, y = e.clientY + 16;
     if (x + w > window.innerWidth - 8) x = e.clientX - w - 14;
@@ -132,8 +291,15 @@ function initTooltips() {
   document.addEventListener('scroll', () => { tip.classList.remove('on'); cur = null; }, true);
 }
 
-/* ---------- Time ---------- */
-function canAdvance() { return S && !blocked() && UI.modal !== 'neg' && UI.modal !== 'newgame'; }
+/* ---------- Time ----------
+   The world keeps moving: a business day runs from opening to close, customers
+   arrive while it runs, and it stops for decisions, results and conversations. */
+const DAY_MIN = 660;
+const SPEEDS = { 1: 16000, 2: 7000, 3: 2500 };
+const TICK = 100;
+function canAdvance() { return S && !blocked() && UI.modal !== 'neg'; }
+function canRun() { return S && UI.screen === 'game' && !UI.paused && canAdvance() && !UI.modal; }
+function arrMin(t) { const [h, m] = t.split(':').map(Number); return (h - 9) * 60 + m; }
 function step(n) {
   if (!canAdvance()) { render(); return; }
   const startKey = S.fin.mtd.key;
@@ -145,122 +311,53 @@ function step(n) {
     if (n === 'month' ? S.fin.mtd.key !== startKey : i >= n) break;
     if (performance.now() - t0 > 8000) break;
   }
-  S.clock = 0;
-  UI.daysSinceSave = (UI.daysSinceSave || 0) + i;
-  if (n !== 1 || UI.daysSinceSave >= 7 || S.report) { saveGame(); }
-  if (UI.drawer) UI.drawer = null;
+  S.clock = 0; revealArrivals(); checkGoals();
+  saveGame();
+  UI.drawer = null;
   render();
 }
-/* The clock runs on its own: a business day goes from 9:00 to 20:00. It stops while a
-   decision, the month-end report, the deal desk or any other window is open, and
-   resumes by itself when that is closed. */
-const DAY_MIN = 660;                       // 9:00 → 20:00
-const SPEEDS = { 1: 14000, 2: 6000, 3: 2000 }; // ms per business day
-const TICK = 100;
-function canRun() { return S && !UI.paused && canAdvance() && !UI.modal && !UI.drawer; }
-function arrMin(t) { const [h, m] = t.split(':').map(Number); return (h - 9) * 60 + m; }
-function clockLabel() { const m = Math.min(DAY_MIN, Math.round(S.clock || 0)), h = 9 + Math.floor(m / 60), mm = m % 60; return `${h > 12 ? h - 12 : h}:${String(mm).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`; }
-function clockState() {
-  if (S.over) return 'Game over';
-  if (S.report) return 'Paused — month-end report';
-  if (S.decisions.length) return 'Paused — decision waiting';
-  if (UI.modal === 'neg') return 'Paused — deal in progress';
-  if (UI.paused) return 'Paused';
-  if (UI.modal || UI.drawer) return 'Paused while this window is open';
-  return dparts(S.day).dow === 0 ? 'Closed Sunday' : ['', 'Normal speed', 'Fast', 'Very fast'][UI.speed];
-}
 function startClock() { clearInterval(UI.timer); UI.timer = setInterval(tick, TICK); }
-function stopPlay() { /* kept for callers: the clock checks canRun() every tick */ }
+function stopPlay() { /* the clock checks canRun() every tick */ }
 function tick() {
   const running = canRun();
-  if (running !== UI.wasRunning) { UI.wasRunning = running; updateClockUI(); if (!running) return; }
+  if (running !== UI.wasRunning) { UI.wasRunning = running; renderHud(); }
   if (!running) return;
   const sunday = dparts(S.day).dow === 0;
-  S.clock = (S.clock || 0) + DAY_MIN * TICK / (SPEEDS[UI.speed] * (sunday ? 0.12 : 1));
+  const before = Math.floor((S.clock || 0) / 60);
+  S.clock = (S.clock || 0) + DAY_MIN * TICK / (SPEEDS[UI.speed] * (sunday ? 0.15 : 1));
   revealArrivals();
   if (S.clock >= DAY_MIN) closeDayLive();
-  updateClockUI();
-}
-function updateClockUI() {
-  const t = document.getElementById('clock-time'), b = document.getElementById('clock-bar'), st = document.getElementById('clock-state');
-  if (t) t.textContent = clockLabel();
-  if (b) b.style.width = (Math.min(1, (S.clock || 0) / DAY_MIN) * 100).toFixed(1) + '%';
-  if (st) st.textContent = clockState();
-  const box = document.querySelector('.clockbox'); if (box) box.classList.toggle('is-paused', !canRun());
+  else if (Math.floor(S.clock / 60) !== before) { const sa = document.querySelector('.sunarc'); if (sa) sa.outerHTML = sunArc(); }
 }
 function visibleVisits() { return S.showroom.filter(v => v.shown && (v.state === 'waiting' || v.state === 'negotiating')); }
 function revealArrivals() {
   const now = S.clock || 0, fresh = [];
   for (const v of S.showroom) if (!v.shown && arrMin(v.time) <= now) { v.shown = true; fresh.push(v); }
   if (!fresh.length) return;
-  renderNav();
-  if (UI.route === 'showroom' || UI.route === 'dashboard') renderViewSafe();
-  else if (UI.speed < 3) for (const v of fresh.slice(0, 2)) { const c = cust(v.cid); toast(`${fullName(c)} walked in — ${c.wantNew === 'used' ? 'used ' : ''}${CLS_LABEL[c.wantCls].toLowerCase()}, about ${money(v.targetPmt)}/mo.`, 'info', { act: 'negotiate', id: v.id, label: 'Work deal' }); }
+  renderHud();
+  if (UI.panel === 'showroom' || UI.panel === 'dashboard') renderViewSafe();
+  if (UI.panel && UI.panel !== 'showroom' && UI.speed < 3) {
+    UI.toasts = UI.toasts.filter(x => !x.arrival);
+    const c = cust(fresh[0].cid), n = visibleVisits().length;
+    toast(n > 1 ? `${fullName(c)} just walked in. ${n} customers are waiting.` : `${fullName(c)} just walked into the showroom.`, 'info', { act: 'negotiate', id: fresh[0].id, label: 'Talk to them' });
+    UI.toasts[UI.toasts.length - 1].arrival = true;
+  }
 }
 function closeDayLive() {
   const day = S.day;
   advanceDay();
   S.clock = 0;
+  Wd.night = 1;
   const d = S.fin.daily[S.fin.daily.length - 1];
-  if (d && d.d === day && dparts(day).dow !== 0 && UI.speed < 3) toast(`${DOW_LONG[dparts(day).dow]} closed: ${plural(d.units, 'vehicle')} sold, ${moneyK(d.gross)} gross.`, d.gross >= 0 ? 'good' : 'bad');
+  if (d && d.d === day && dparts(day).dow !== 0 && UI.speed < 3) toast(`${DOW_LONG[dparts(day).dow]} closed: ${plural(d.units, 'car')} sold, ${moneyK(d.gross)} gross profit.`, d.gross >= 0 ? 'good' : 'bad');
   UI.daysSinceSave = (UI.daysSinceSave || 0) + 1;
   if (UI.daysSinceSave >= 7 || S.report || S.decisions.length) saveGame();
-  revealArrivals();
-  renderNav(); renderTop(); renderViewSafe(); renderOverlay();
-}
-function renderViewSafe() {
-  const a = document.activeElement;
-  if (a && a.closest && a.closest('#view') && a.matches('input, select, textarea')) { UI.viewDirty = true; return; }
-  UI.viewDirty = false; renderView();
-  const tip = document.getElementById('tip'); if (tip) tip.classList.remove('on');
-}
-
-/* ---------- Save / load (IndexedDB, falling back to localStorage) ---------- */
-let _db = null;
-function idbOpen() {
-  if (_db) return Promise.resolve(_db);
-  return new Promise((res, rej) => {
-    try {
-      const r = indexedDB.open('dealer-empire', 1);
-      r.onupgradeneeded = () => r.result.createObjectStore('saves');
-      r.onsuccess = () => { _db = r.result; res(_db); };
-      r.onerror = () => rej(r.error);
-    } catch (e) { rej(e); }
-  });
-}
-function idbPut(key, val) {
-  return idbOpen().then(db => new Promise((res, rej) => {
-    const tx = db.transaction('saves', 'readwrite');
-    tx.objectStore('saves').put(val, key); // structured clone happens now, so later changes don't leak in
-    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error);
-  }));
-}
-function idbGet(key) {
-  return idbOpen().then(db => new Promise((res, rej) => {
-    const rq = db.transaction('saves', 'readonly').objectStore('saves').get(key);
-    rq.onsuccess = () => res(rq.result || null); rq.onerror = () => rej(rq.error);
-  }));
-}
-function saveGame(manual) {
-  UI.daysSinceSave = 0;
-  const done = () => { if (manual) toast('Game saved in this browser.', 'good'); };
-  const fallback = () => {
-    try { localStorage.setItem(SAVE_KEY, JSON.stringify(S)); done(); }
-    catch (e) { if (manual) toast('Saving failed — browser storage is unavailable or full.', 'bad'); }
-  };
-  try { idbPut(SAVE_KEY, S).then(done, fallback); } catch (e) { fallback(); }
-}
-async function loadGame() {
-  try { const s = await idbGet(SAVE_KEY); if (s) return s; } catch (e) { /* try localStorage */ }
-  try { const raw = localStorage.getItem(SAVE_KEY); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+  revealArrivals(); checkGoals();
+  renderHud(); if (UI.panel) { renderViewSafe(); const sub = document.querySelector('.pwin-sub'); if (sub) sub.textContent = `${S.dealerName} · ${fmtDate(S.day)}`; } renderOverlay();
 }
 
 /* ---------- Theme ---------- */
-function currentTheme() {
-  const a = document.documentElement.getAttribute('data-theme');
-  if (a) return a;
-  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-}
+function currentTheme() { const a = document.documentElement.getAttribute('data-theme'); if (a) return a; return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
 function applyTheme() {
   const pref = UI.themePref || 'system';
   if (pref === 'system') { if (UI.hostTheme) document.documentElement.setAttribute('data-theme', UI.hostTheme); else document.documentElement.removeAttribute('data-theme'); }
@@ -271,12 +368,10 @@ function applyTheme() {
 function setPath(obj, path, val) { const ks = path.split('.'); let o = obj; for (let i = 0; i < ks.length - 1; i++) o = o[ks[i]]; o[ks[ks.length - 1]] = val; }
 const ACT = {
   go(d) {
-    UI.route = d.to; UI.navOpen = false; UI.drawer = null;
     if (d.filter && d.to === 'customers') { UI.filters.cust = { seg: 'all', q: '', quick: d.filter }; UI.page.cust = 0; }
-    try { if (location.hash !== '#' + d.to) history.replaceState(null, '', '#' + d.to); } catch (e) { /* hash routing unavailable */ }
-    window.scrollTo(0, 0);
+    UI.panel = UI.panel === d.to && !d.filter ? null : d.to; UI.route = d.to; UI.drawer = null;
   },
-  navToggle() { UI.navOpen = !UI.navOpen; },
+  closePanel() { UI.panel = null; },
   set(d) { const v = isNaN(+d.val) || d.val === '' ? d.val : +d.val; setPath(S.settings, d.key, v); if (d.key === 'usedPlan') toast('Default trade plan updated.', 'info'); },
   filterSeg(d) { const [a, b] = d.key.split('.'); UI.filters[a][b] = d.val; UI.page[a] = 0; },
   sortSeg(d) { UI.sort[d.key] = d.val; UI.page[d.key] = 0; },
@@ -286,10 +381,10 @@ const ACT = {
   openOrder() { UI.modal = 'order'; UI.order = UI.order || { mid: 'terra', ti: 0, color: 'any', qty: 2 }; },
   orderModel(d) { UI.order.mid = d.id; UI.order.ti = 0; UI.order.qty = Math.min(UI.order.qty, MODEL[d.id].exclusive ? Math.max(1, S.oem.exclusiveAlloc) : 20); },
   orderQty(d) { UI.order.qty = clamp(UI.order.qty + +d.val, 1, 20); },
-  placeOrder() { const o = UI.order; if (orderVehicles(o.mid, o.ti, o.color, o.qty) === true) toast(`Ordered ${o.qty} × ${MODEL[o.mid].name}. Arriving in 1–3 weeks.`, 'good'); },
+  placeOrder() { const o = UI.order; if (orderVehicles(o.mid, o.ti, o.color, o.qty) === true) { toast(`Ordered ${o.qty} × ${MODEL[o.mid].name}. Watch for the car carrier in 1–3 weeks.`, 'good'); checkGoals(); } },
   openVeh(d) { UI.drawer = { type: 'veh', id: d.id }; },
   wholesaleNew(d) { const v = vehById(d.id); if (v) wholesaleNew(v); UI.drawer = null; },
-  negotiate(d) { openNegotiation(d.id); return 'skip'; },
+  negotiate(d) { UI.panel = null; openNegotiation(d.id); return 'skip'; },
   negVeh(d) {
     const v = negVisit(); const veh = vehById(d.id); if (!v || !veh) return;
     const old = UI.neg.deal; const nd = defaultDeal(v, veh);
@@ -301,12 +396,13 @@ const ACT = {
   negType(d) {
     const v = negVisit(), deal = UI.neg.deal; if (!v || !deal) return;
     const c = cust(v.cid), veh = vehById(deal.vid);
+    if (d.val === 'lease' && veh.kind !== 'new') return;
     deal.type = d.val;
     if (d.val === 'lease') { deal.term = 36; deal.rate = round2(buyRate(c.credit, 36, false) - 0.6 + S.settings.desk.markup); deal.prod = deal.prod.filter(p => p !== 'gap'); }
     else if (d.val === 'finance') { deal.term = veh.kind === 'new' ? 72 : 60; deal.rate = round2(buyRate(c.credit, deal.term, veh.kind === 'used') + S.settings.desk.markup); }
     else { deal.rate = 0; deal.prod = []; }
   },
-  negAppraise() { const v = negVisit(); if (!v) return; v.appraised = true; v.mood = clamp(v.mood - 2, 0, 100); v.log.push({ who: 'system', text: `Used manager appraised the ${v.trade.spec.model}: ACV ${money(v.trade.acv)}, estimated recon ${money(v.trade.recon)}.` }); },
+  negAppraise() { const v = negVisit(); if (!v) return; v.appraised = true; v.mood = clamp(v.mood - 2, 0, 100); v.log.push({ who: 'system', text: `Your used manager walked the ${v.trade.spec.model}: worth ${money(v.trade.acv)} to you, needs about ${money(v.trade.recon)} of work.` }); },
   negTD() {
     const v = negVisit(); if (!v || v.td) return;
     const r = evalDeal(v, UI.neg.deal); v.td = true;
@@ -316,16 +412,18 @@ const ACT = {
   negTO() {
     const v = negVisit(), g = present('gsm')[0]; if (!v || v.to || !g) return;
     v.to = true; v.boost = (v.boost || 0) + 0.15 + (g.skill - 50) / 120; v.patience++;
-    v.log.push({ who: 'system', text: `${empName(g)} joins the table and resets the conversation. The customer gives you another round.` });
+    v.log.push({ who: 'system', text: `${empName(g)} sits down and resets the conversation. You get another round.` });
   },
   negPresent() { negPresent(); return 'skip'; },
   negAcceptCounter() {
     const v = negVisit(); if (!v || !v.counter) return;
     UI.neg.deal = { ...v.counter.deal, acc: v.counter.deal.acc.slice(), prod: v.counter.deal.prod.slice() };
     const r = evalDeal(v, UI.neg.deal);
-    if (!r.approved) { v.log.push({ who: 'system', text: 'The lender would not approve their counter structure.' }); v.counter = null; return; }
+    if (!r.approved) { v.log.push({ who: 'system', text: 'The bank will not approve their counter.' }); v.counter = null; return; }
+    v.log.push({ who: 'you', text: 'Deal. Let\'s get the paperwork going.' });
     v.log.push({ who: 'customer', text: pick(LINES.accept) });
     UI.neg.done = finalizeSale(v, UI.neg.deal, null, 'manual');
+    checkGoals();
   },
   closeNeg() {
     const v = negVisit();
@@ -334,7 +432,7 @@ const ACT = {
   },
   closeModal() { UI.modal = null; },
   closeDrawer() { UI.drawer = null; },
-  openCustomer(d) { UI.drawer = { type: 'cust', id: d.id }; if (UI.modal === 'neg') UI.modal = UI.modal; },
+  openCustomer(d) { UI.drawer = { type: 'cust', id: d.id }; },
   invite(d) { inviteCustomer(d.id); },
   callBook(d) { callToBook(d.id); },
   upgradeOffers() { sendUpgradeOffers(); },
@@ -357,7 +455,7 @@ const ACT = {
   partReturn(d) { const p = partByPn(d.pn); if (p) returnParts(p); },
   openHire() { UI.modal = 'hire'; UI.hireRole = UI.hireRole || 'sales'; },
   hireRole(d) { UI.hireRole = d.val; },
-  hire(d) { hireCandidate(d.role, d.id); },
+  hire(d) { hireCandidate(d.role, d.id); checkGoals(); },
   empTrain(d) { UI.modal = { kind: 'train', id: d.id }; },
   empComp(d) { UI.modal = { kind: 'comp', id: d.id }; },
   empPromote(d) { UI.modal = { kind: 'promote', id: d.id }; },
@@ -366,10 +464,11 @@ const ACT = {
   promote(d) { promoteEmployee(d.id, d.to); UI.modal = null; },
   fire(d) { fireEmployee(d.id); UI.modal = null; },
   upgradeFacility() { upgradeFacility(); },
-  decide(d) { resolveDecision(d.id, +d.val); saveGame(); },
+  decide(d) { resolveDecision(d.id, +d.val); checkGoals(); saveGame(); },
   openDecision() { },
-  closeReport() { S.report = null; saveGame(); },
-  startExp(d) { startExpansion(d.id); },
+  openNewGame() { UI.screen = 'title'; UI.titleView = 'new'; },
+  closeReport() { S.report = null; checkGoals(); saveGame(); },
+  startExp(d) { startExpansion(d.id); checkGoals(); },
   storeInvest(d) { storeInvest(d.id); },
   storeGm(d) { storeReplaceGm(d.id); },
   storeSell(d) { storeSell(d.id); },
@@ -378,14 +477,25 @@ const ACT = {
   step1() { step(1); return 'skip'; },
   step7() { step(7); return 'skip'; },
   stepMonth() { step('month'); return 'skip'; },
-  openNewGame() { UI.modal = 'newgame'; },
   saveNow() { saveGame(true); },
+  toTitle() { saveGame(); UI.screen = 'title'; UI.titleView = 'main'; UI.panel = null; UI.drawer = null; UI.modal = null; loadMeta().then(render); },
+  recenter() { fitCamera(); },
+  titleView(d) { UI.titleView = d.val; },
+  loadSlot(d) { loadSlot(+d.val); return 'skip'; },
+  delSlot(d) {
+    const n = +d.val;
+    if (UI.confirmDel !== n) { UI.confirmDel = n; toast(`Click delete again to erase slot ${n}.`, 'bad'); setTimeout(() => { UI.confirmDel = null; }, 4000); return 'skip'; }
+    UI.confirmDel = null; delete UI.meta.slots[n]; if (UI.meta.active === n) UI.meta.active = null;
+    idbDel('slot' + n).then(() => idbPut('meta', UI.meta)).then(render, render);
+    return 'skip';
+  },
   theme() {
     const order = ['system', 'light', 'dark'];
     UI.themePref = order[(order.indexOf(UI.themePref || 'system') + 1) % 3];
     try { localStorage.setItem('de-theme', UI.themePref); } catch (e) { /* ignore */ }
     applyTheme();
   },
+  ...DEAL_ACT,
 };
 const CHG = {
   ad(el) { S.settings.ad = +el.value; },
@@ -404,7 +514,7 @@ const CHG = {
   program(el) {
     const id = el.dataset.id, p = PROGRAM[id];
     S.programs[id] = el.checked;
-    if (el.checked) { S.progStats[id].since = S.day; logEvent('info', 'retention', `Launched ${p.name}${p.monthly ? ` (${money(p.monthly)}/month)` : ''}.`); toast(`${p.name} is now active.`, 'good'); }
+    if (el.checked) { S.progStats[id].since = S.day; logEvent('info', 'retention', `Launched ${p.name}${p.monthly ? ` (${money(p.monthly)}/month)` : ''}.`); toast(`${p.name} is now active.`, 'good'); checkGoals(); }
     else { logEvent('info', 'retention', `Discontinued ${p.name}.`); toast(`${p.name} turned off.`, 'info'); }
   },
   finMonth(el) { UI.finMonth = el.value; },
@@ -415,6 +525,7 @@ function onClick(e) {
   if (!a || a.disabled) return;
   if (a.tagName === 'A' || a.tagName === 'BUTTON' || a.getAttribute('role') === 'button') e.preventDefault();
   const fn = ACT[a.dataset.act]; if (!fn) return;
+  const sk = a.closest('details.skip'); if (sk && a.tagName === 'BUTTON') sk.open = false;
   const r = fn(a.dataset, a, e);
   if (r !== 'skip') render();
 }
@@ -447,13 +558,10 @@ function onInput(e) {
     negUpdateLive();
     return;
   }
-  if (el.dataset.chg === 'filter') {
-    clearTimeout(UI.searchT);
-    UI.searchT = setTimeout(() => { CHG.filter(el); render(); }, 260);
-  }
+  if (el.dataset.chg === 'filter') { clearTimeout(UI.searchT); UI.searchT = setTimeout(() => { CHG.filter(el); render(); }, 260); }
   if (el.type === 'range' && el.dataset.chg) {
     const lbl = el.closest('.fl, .row2'); const b = lbl && lbl.querySelector('b');
-    if (b && (el.dataset.chg === 'ad' || el.dataset.chg === 'laborRate' || el.dataset.chg === 'oilPrice' || el.dataset.chg === 'vehDisc')) b.textContent = money(+el.value) + (el.dataset.chg === 'ad' ? '/mo' : el.dataset.chg === 'laborRate' ? '/hr' : '');
+    if (b && ['ad', 'laborRate', 'oilPrice', 'vehDisc'].includes(el.dataset.chg)) b.textContent = money(+el.value) + (el.dataset.chg === 'ad' ? '/mo' : el.dataset.chg === 'laborRate' ? '/hr' : '');
   }
 }
 function onSubmit(e) {
@@ -466,25 +574,28 @@ function onSubmit(e) {
     else setCompensation(emp.id, +fd.get('salary'), fd.get('comm') != null ? +fd.get('comm') / 100 : null);
     UI.modal = null;
   }
-  if (f.dataset.form === 'newgame') {
-    stopPlay();
-    newGame({ name: String(fd.get('name') || 'Lakeshore Aurex').trim() || 'Lakeshore Aurex', difficulty: fd.get('difficulty') });
-    S.clock = 0; UI.paused = false; revealArrivals();
-    UI.modal = null; UI.route = 'dashboard'; UI.drawer = null; UI.neg = null; UI.filters = {}; UI.page = {};
-    try { history.replaceState(null, '', '#dashboard'); } catch (e) { /* ignore */ }
-    saveGame();
+  if (f.dataset.form === 'create') {
+    const name = String(fd.get('name') || '').trim() || 'Lakeshore Aurex';
+    newGame({ name, difficulty: fd.get('difficulty') });
+    S.color = fd.get('color') || '#0a7480'; S.gmName = String(fd.get('gm') || '').trim();
+    S.clock = 0;
+    enterGame(S, +fd.get('slot') || 1);
+    toast(`Welcome to ${name}${S.gmName ? ', ' + S.gmName : ''}. Customers are on their way.`, 'good');
+    return;
   }
   render();
 }
 function onKey(e) {
-  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role="button"][data-act]')) { e.preventDefault(); e.target.click(); }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role="button"][data-act]')) { e.preventDefault(); e.target.click(); return; }
   if (e.key === 'Escape') {
     if (UI.drawer) { UI.drawer = null; render(); }
-    else if (UI.modal && UI.modal !== 'newgame') { if (UI.modal === 'neg') ACT.closeNeg(); else UI.modal = null; render(); }
+    else if (UI.modal) { if (UI.modal === 'neg') ACT.closeNeg(); else UI.modal = null; render(); }
+    else if (UI.panel) { UI.panel = null; render(); }
+    return;
   }
-  if (e.target.matches('input, select, textarea, button, summary') || UI.modal || blocked()) return;
-  if (e.key === ' ') { e.preventDefault(); UI.paused = !UI.paused; renderTop(); }
-  if (['1', '2', '3'].includes(e.key)) { UI.speed = +e.key; UI.paused = false; renderTop(); }
+  if (UI.screen !== 'game' || e.target.matches('input, select, textarea, button, summary') || UI.modal || blocked()) return;
+  if (e.key === ' ') { e.preventDefault(); UI.paused = !UI.paused; renderHud(); }
+  if (['1', '2', '3'].includes(e.key)) { UI.speed = +e.key; UI.paused = false; renderHud(); }
 }
 
 /* ---------- Boot ---------- */
@@ -492,17 +603,19 @@ async function start(data) {
   UI.hostTheme = document.documentElement.getAttribute('data-theme');
   try { UI.themePref = localStorage.getItem('de-theme') || 'system'; } catch (e) { UI.themePref = 'system'; }
   applyTheme();
-  const saved = data && data.state ? data.state : await loadGame();
-  if (saved && saved.v === 3 && saved.customers) { S = saved; rebuildIndex(); MODS = null; refreshMods(); computeKpis(); }
-  else newGame({});
-  if (S.clock == null) S.clock = 0;
   try { UI.speed = +localStorage.getItem('de-speed') || 1; } catch (e) { UI.speed = 1; }
   if (!SPEEDS[UI.speed]) UI.speed = 1;
-  UI.paused = false;
-  for (const v of S.showroom) if (v.shown == null) v.shown = arrMin(v.time) <= S.clock;
-  const h = location.hash.replace('#', '');
-  if (TITLES[h]) UI.route = h;
+  UI.paused = false; UI.panel = null;
   buildShell();
+  const meta = await loadMeta();
+  let bg = null;
+  if (data && data.state) { S = data.state; UI.slot = data.slot || meta.active || 1; UI.screen = 'game'; prepareState(); }
+  else {
+    if (meta.active) { try { bg = await idbGet('slot' + meta.active); } catch (e) { bg = null; } }
+    if (bg) { S = bg; prepareState(); } else { newGame({ seed: 20270301 }); S.clock = 300; }
+    UI.screen = 'title'; UI.titleView = 'main';
+  }
+  initWorld(document.getElementById('world'));
   initTooltips();
   document.addEventListener('click', onClick);
   document.addEventListener('change', onChange);
@@ -510,11 +623,9 @@ async function start(data) {
   document.addEventListener('submit', onSubmit);
   document.addEventListener('keydown', onKey);
   document.addEventListener('focusout', () => setTimeout(() => { if (UI.viewDirty) renderViewSafe(); }, 0));
-  window.addEventListener('hashchange', () => { const k = location.hash.replace('#', ''); if (TITLES[k] && k !== UI.route) { UI.route = k; render(); } });
   window.addEventListener('pagehide', () => saveGame());
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveGame(); });
-  if (window.claude && window.claude.hot && window.claude.hot.snapshot) window.claude.hot.snapshot(() => ({ state: S }));
-  revealArrivals();
+  if (window.claude && window.claude.hot && window.claude.hot.snapshot) window.claude.hot.snapshot(() => (UI.screen === 'game' ? { state: S, slot: UI.slot } : {}));
   render();
   startClock();
 }

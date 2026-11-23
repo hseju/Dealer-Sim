@@ -60,7 +60,7 @@ VIEWS.dashboard = function () {
   const intro = S.flags.intro ? `<section class="intro">
     <div class="intro-text"><h2>Welcome, General Manager</h2>
       <p>You now run ${esc(S.dealerName)}: ${S.inv.filter(v => v.status === 'available').length} new units on the ground, ${S.used.length} used, ${S.emps.filter(e => e.status !== 'gone').length} staff and ${num(S.customers.length)} customers on file. The previous GM lost money three months running; Aurex expects ${t} new sales this month.</p>
-      <ol class="steps"><li><b>Stock the lot.</b> ${S.inv.filter(v => v.status === 'available').length} new units won't last a month. ${btnLink('Order from Aurex', 'openOrder')}</li><li><b>Work deals.</b> Customers walk into the ${btnLink('showroom', 'go', 'showroom')} through the day. Take the ones you want; your team handles the rest at closing.</li><li><b>Keep them for life.</b> Service retention drives long-term profit. See ${btnLink('Retention', 'go', 'retention')}.</li><li><b>The clock is running.</b> Customers walk in through the day. Change speed or pause at the top; decisions and the deal desk pause it for you.</li></ol></div>
+      <ol class="steps"><li><b>Stock the lot.</b> ${S.inv.filter(v => v.status === 'available').length} new units won't last a month. ${btnLink('Order from Aurex', 'openOrder')}</li><li><b>Work deals.</b> Customers walk into the ${btnLink('showroom', 'go', 'showroom')} through the day. Take the ones you want; your team handles the rest at closing.</li><li><b>Keep them for life.</b> Service retention drives long-term profit. See ${btnLink('Retention', 'go', 'retention')}.</li><li><b>Play from the lot.</b> Click customers to sell to them, cars to inspect them and buildings to manage them. Goals in the corner show what to do next.</li></ol></div>
     <button class="btn ghost sm" data-act="dismissIntro" type="button">${icon('x')}<span>Dismiss</span></button></section>` : '';
   const kp = [
     kpi('Cash', money(S.cash), `Credit line ${moneyK(CREDIT_LINE)} available`, { tone: S.cash < 250000 ? 'bad' : '', spark: sparkline(dailyCash), link: 'finance' }),
@@ -310,7 +310,7 @@ function negWorksheet(v, d, veh) {
     <div class="sq ${tr ? '' : 'disabled'}"><label for="neg-trade">Trade allowance</label><input class="num-in" type="number" id="neg-trade" data-neg="trade" value="${d.trade}" step="100" min="0" max="${tMax}" ${tr ? '' : 'disabled'}><input type="range" id="neg-trade-r" data-neg="trade" min="0" max="${tMax || 1}" step="100" value="${d.trade}" ${tr ? '' : 'disabled'} aria-label="Trade allowance slider"><small class="muted">${tr ? (v.appraised ? `${signed(d.trade - tr.acv)} vs ACV` : 'Appraise to see ACV') : 'No trade'}</small></div>
     <div class="sq"><label for="neg-down">${d.type === 'cash' ? 'Cash deal' : 'Down payment'}</label>${d.type === 'cash' ? `<div class="big">${money(r.totalDue)}</div><small class="muted">Total due on delivery</small>` : `<input class="num-in" type="number" id="neg-down" data-neg="down" value="${d.down}" step="250" min="0" max="${dMax}"><input type="range" id="neg-down-r" data-neg="down" min="0" max="${dMax}" step="250" value="${clamp(d.down, 0, dMax)}" aria-label="Down payment slider"><small class="muted">They have about ${moneyK(c.cashAvail)}</small>`}</div>
     <div class="sq sq-pay"><label>Monthly payment</label><div class="big" id="neg-pmt">${d.type === 'cash' ? '—' : money(r.pmt)}</div>
-      ${seg('negType', [['finance', 'Finance'], ['lease', 'Lease'], ['cash', 'Cash']], d.type, { act: 'negType', cls: 'sm' })}
+      ${seg('negType', isNew ? [['finance', 'Finance'], ['lease', 'Lease'], ['cash', 'Cash']] : [['finance', 'Finance'], ['cash', 'Cash']], d.type, { act: 'negType', cls: 'sm' })}
       ${d.type !== 'cash' ? `<div class="row2"><label class="mini">Term<select class="sel sm" id="neg-term" data-neg="term">${terms.map(t => `<option value="${t}" ${t === d.term ? 'selected' : ''}>${t} mo</option>`).join('')}</select></label>
       <label class="mini">${d.type === 'lease' ? 'Rate (APR equiv.)' : 'APR'}<input class="num-in sm" type="number" id="neg-rate" data-neg="rate" step="0.1" min="0" max="29.9" value="${d.rate}"></label></div><small class="muted" id="neg-buy">Buy rate ${r.br.toFixed(2)}% · markup ${r.markup.toFixed(2)}%</small>` : ''}
     </div>
@@ -378,6 +378,7 @@ function negDone(v, c) {
 }
 function negUpdateLive() {
   const v = negVisit(); if (!v || !UI.neg.deal) return;
+  if (typeof updateDealCard === 'function') updateDealCard();
   const el = document.getElementById('neg-live'); if (el) el.innerHTML = negLive(v, UI.neg.deal);
   const r = evalDeal(v, UI.neg.deal);
   const p = document.getElementById('neg-pmt'); if (p) p.textContent = UI.neg.deal.type === 'cash' ? '—' : money(r.pmt);
