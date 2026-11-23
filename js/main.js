@@ -211,7 +211,7 @@ const ACT = {
   go(d) {
     UI.route = d.to; UI.navOpen = false; UI.drawer = null;
     if (d.filter && d.to === 'customers') { UI.filters.cust = { seg: 'all', q: '', quick: d.filter }; UI.page.cust = 0; }
-    if (location.hash !== '#' + d.to) history.replaceState(null, '', '#' + d.to);
+    try { if (location.hash !== '#' + d.to) history.replaceState(null, '', '#' + d.to); } catch (e) { /* hash routing unavailable */ }
     window.scrollTo(0, 0);
   },
   navToggle() { UI.navOpen = !UI.navOpen; },
@@ -408,7 +408,7 @@ function onSubmit(e) {
     stopPlay();
     newGame({ name: String(fd.get('name') || 'Lakeshore Aurex').trim() || 'Lakeshore Aurex', difficulty: fd.get('difficulty') });
     UI.modal = null; UI.route = 'dashboard'; UI.drawer = null; UI.neg = null; UI.filters = {}; UI.page = {};
-    history.replaceState(null, '', '#dashboard');
+    try { history.replaceState(null, '', '#dashboard'); } catch (e) { /* ignore */ }
     saveGame();
   }
   render();
