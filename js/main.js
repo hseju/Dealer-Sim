@@ -53,28 +53,21 @@ function buildShell() {
     <div id="pwin"></div>
   </div><div id="title"></div><div id="overlay"></div><div id="drawer"></div><div id="toasts" aria-live="polite"></div><div id="tip" role="tooltip"></div>`;
 }
-function sunArc() {
-  const t = clamp((S.clock || 0) / DAY_MIN, 0, 1), sunday = dparts(S.day).dow === 0;
-  const a = Math.PI * (1 - t), x = 30 + 24 * Math.cos(a), y = 26 - 20 * Math.sin(a);
-  return `<svg class="sunarc" viewBox="0 0 60 30" aria-hidden="true"><path d="M6 26 A24 20 0 0 1 54 26" fill="none" stroke="currentColor" stroke-opacity=".3" stroke-width="2" stroke-dasharray="2 3"/><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5" fill="${sunday ? '#9fb3c8' : t > 0.8 ? '#f08a4b' : '#f5c242'}"/></svg>`;
-}
 function renderHud() {
   const hud = document.getElementById('hud'); if (!hud || !S) return;
   if (UI.screen !== 'game') { hud.innerHTML = ''; return; }
   const p = dparts(S.day), t = S.oem.targets.units;
   const waiting = visibleVisits().length, appr = S.used.filter(u => u.status === 'appraisal').length;
   const badges = { showroom: waiting, used: appr, service: S.svc.ros.filter(r => r.status === 'parts').length, employees: S.emps.filter(e => e.status !== 'gone' && e.morale < 38).length, retention: 0 };
-  const blockedNow = !canAdvance();
   const g = currentGoal();
   const gp = g && g.prog ? g.prog() : null;
   const alerts = computeAlerts().filter(a => a.tone !== 'good' && !/OEM sales target/.test(a.text)).slice(0, 3);
-  const sb = (n, lab) => `<button type="button" class="sp ${!UI.paused && UI.speed === n ? 'on' : ''}" data-act="speed" data-val="${n}" aria-label="${lab}" data-tip="${lab}">${n === 1 ? icon('play') : `${icon('week')}<b>${n}</b>`}</button>`;
   const wasOpen = [...hud.querySelectorAll('details')].map(d => d.open);
   hud.innerHTML = `
     <div class="hud-top">
       <div class="hud-card hud-brand" data-act="go" data-to="dashboard" role="button" tabindex="0" data-tip="GM office">
         <svg class="logo" viewBox="0 0 40 40" aria-hidden="true"><rect x="1" y="1" width="38" height="38" rx="9" fill="${S.color || '#0a7480'}"/><path d="M9 27a11 11 0 1 1 22 0" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="m20 27 6-8" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><circle cx="20" cy="27" r="2.2" fill="#fff"/></svg>
-        <div><b>${esc(S.dealerName)}</b><small>${DOW_LONG[p.dow]} · ${MONTHS[p.m]} ${p.dom}, ${p.y}${p.dow === 0 ? ' · closed' : ''}</small></div>${sunArc()}
+        <div><b>${esc(S.dealerName)}</b><small>${DOW_LONG[p.dow]} · ${MONTHS[p.m]} ${p.dom}, ${p.y}${p.dow === 0 ? ' · closed' : ''}</small></div>
       </div>
       <div class="hud-card hud-res">
         <span class="res ${S.cash < 0 ? 'neg' : ''}" data-act="go" data-to="finance" role="button" tabindex="0" data-tip="Cash in the bank">${icon('dollar')}<b>${moneyK(S.cash)}</b></span>
@@ -82,12 +75,7 @@ function renderHud() {
         <span class="res" data-act="go" data-to="oem" role="button" tabindex="0" data-tip="New cars sold vs the Aurex target this month">${icon('flag')}<b>${S.oem.mtdNew}/${t}</b><small>Aurex</small></span>
         <span class="res" data-act="go" data-to="retention" role="button" tabindex="0" data-tip="Customer satisfaction, sales / service">${icon('star')}<b>${Math.round(kpiSalesCsi())}</b><small>CSI</small></span>
       </div>
-      <div class="hud-card hud-time" role="group" aria-label="Game speed">
-        <button type="button" class="sp ${UI.paused ? 'on' : ''}" data-act="pause" aria-label="Pause" data-tip="Pause (space)">${icon('pause')}</button>${sb(1, 'Play')}${sb(2, 'Fast')}${sb(3, 'Fastest')}
-        <details class="skip"><summary class="sp" data-tip="Skip ahead">${icon('month')}</summary><div class="skip-menu">
-          <button type="button" data-act="step1" ${blockedNow ? 'disabled' : ''}>Skip to tomorrow</button>
-          <button type="button" data-act="step7" ${blockedNow ? 'disabled' : ''}>Skip a week</button>
-          <button type="button" data-act="stepMonth" ${blockedNow ? 'disabled' : ''}>Skip to month-end</button></div></details>
+      <div class="hud-card hud-time">
         <details class="skip"><summary class="sp" aria-label="Menu" data-tip="Menu">${icon('menu')}</summary><div class="skip-menu">
           <button type="button" data-act="saveNow">${icon('save')} Save game</button>
           <button type="button" data-act="toTitle">${icon('left')} Main menu</button>
@@ -95,7 +83,6 @@ function renderHud() {
           <button type="button" data-act="theme">${icon(currentTheme() === 'dark' ? 'moon' : 'sun')} Window theme: ${{ system: 'System', light: 'Light', dark: 'Dark' }[UI.themePref || 'system']}</button></div></details>
       </div>
     </div>
-    ${UI.paused || !canRun() ? `<div class="paused-tag">${esc(pauseReason())}</div>` : ''}
     ${UI.panel ? '' : `<div class="hud-left">
       ${g ? `<div class="goal" data-act="go" data-to="dashboard" role="button" tabindex="0"><span class="goal-k">Goal ${S.flags.goals.length + 1} of ${GOALS.length}</span><b>${esc(g.title)}</b><small>${esc(g.desc)}</small>${gp ? bar(gp[0] / gp[1], 'accent') : ''}<span class="goal-r">Reward ${moneyK(g.reward)}</span></div>` : `<div class="goal"><span class="goal-k">Career</span><b>Every goal complete</b><small>You built a dealer group. Keep growing it.</small></div>`}
     </div>
@@ -104,6 +91,7 @@ function renderHud() {
     <nav class="toolbar" aria-label="Departments">${Object.entries(PANELS).map(([k, [lab, ic]]) => `<button type="button" class="tool ${UI.panel === k ? 'on' : ''}" data-act="go" data-to="${k}">${icon(ic)}<span>${lab}</span>${badges[k] ? `<b class="tool-badge">${badges[k]}</b>` : ''}</button>`).join('')}</nav>`;
   hud.querySelectorAll('details').forEach((d, i) => { if (wasOpen[i]) d.open = true; });
 }
+function renderHudSoon() { /* the menu state feeds canRun(); nothing to redraw */ }
 function pauseReason() {
   if (S.over) return 'Game over';
   if (S.report) return 'Paused — month-end results';
@@ -230,7 +218,7 @@ function prepareState() {
 }
 function enterGame(state, slot) {
   S = state; prepareState();
-  UI.slot = slot; UI.meta.active = slot; UI.screen = 'game'; UI.panel = null; UI.modal = null; UI.drawer = null; UI.neg = null; UI.paused = false; UI.filters = {}; UI.page = {};
+  UI.slot = slot; UI.meta.active = slot; UI.screen = 'game'; UI.panel = null; UI.modal = null; UI.drawer = null; UI.neg = null; UI.filters = {}; UI.page = {};
   resetWorld(); fitCamera();
   revealArrivals();
   saveGame();
@@ -295,10 +283,10 @@ function initTooltips() {
    The world keeps moving: a business day runs from opening to close, customers
    arrive while it runs, and it stops for decisions, results and conversations. */
 const DAY_MIN = 660;
-const SPEEDS = { 1: 16000, 2: 7000, 3: 2500 };
+const DAY_MS = 14000; // one business day, opening to close
 const TICK = 100;
 function canAdvance() { return S && !blocked() && UI.modal !== 'neg'; }
-function canRun() { return S && UI.screen === 'game' && !UI.paused && canAdvance() && !UI.modal; }
+function canRun() { return S && UI.screen === 'game' && canAdvance() && !UI.modal && !UI.panel && !UI.drawer && !document.querySelector('.hud details[open]') && document.visibilityState !== 'hidden'; }
 function arrMin(t) { const [h, m] = t.split(':').map(Number); return (h - 9) * 60 + m; }
 function step(n) {
   if (!canAdvance()) { render(); return; }
@@ -323,11 +311,9 @@ function tick() {
   if (running !== UI.wasRunning) { UI.wasRunning = running; renderHud(); }
   if (!running) return;
   const sunday = dparts(S.day).dow === 0;
-  const before = Math.floor((S.clock || 0) / 60);
-  S.clock = (S.clock || 0) + DAY_MIN * TICK / (SPEEDS[UI.speed] * (sunday ? 0.15 : 1));
+  S.clock = (S.clock || 0) + DAY_MIN * TICK / (DAY_MS * (sunday ? 0.15 : 1));
   revealArrivals();
   if (S.clock >= DAY_MIN) closeDayLive();
-  else if (Math.floor(S.clock / 60) !== before) { const sa = document.querySelector('.sunarc'); if (sa) sa.outerHTML = sunArc(); }
 }
 function visibleVisits() { return S.showroom.filter(v => v.shown && (v.state === 'waiting' || v.state === 'negotiating')); }
 function revealArrivals() {
@@ -336,7 +322,7 @@ function revealArrivals() {
   if (!fresh.length) return;
   renderHud();
   if (UI.panel === 'showroom' || UI.panel === 'dashboard') renderViewSafe();
-  if (UI.panel && UI.panel !== 'showroom' && UI.speed < 3) {
+  if (UI.panel && UI.panel !== 'showroom') {
     UI.toasts = UI.toasts.filter(x => !x.arrival);
     const c = cust(fresh[0].cid), n = visibleVisits().length;
     toast(n > 1 ? `${fullName(c)} just walked in. ${n} customers are waiting.` : `${fullName(c)} just walked into the showroom.`, 'info', { act: 'negotiate', id: fresh[0].id, label: 'Talk to them' });
@@ -349,7 +335,7 @@ function closeDayLive() {
   S.clock = 0;
   Wd.night = 1;
   const d = S.fin.daily[S.fin.daily.length - 1];
-  if (d && d.d === day && dparts(day).dow !== 0 && UI.speed < 3) toast(`${DOW_LONG[dparts(day).dow]} closed: ${plural(d.units, 'car')} sold, ${moneyK(d.gross)} gross profit.`, d.gross >= 0 ? 'good' : 'bad');
+  if (d && d.d === day && dparts(day).dow !== 0 && d.units) toast(`${DOW_LONG[dparts(day).dow]} closed: ${plural(d.units, 'car')} sold, ${moneyK(d.gross)} gross profit.`, d.gross >= 0 ? 'good' : 'bad');
   UI.daysSinceSave = (UI.daysSinceSave || 0) + 1;
   if (UI.daysSinceSave >= 7 || S.report || S.decisions.length) saveGame();
   revealArrivals(); checkGoals();
@@ -472,8 +458,6 @@ const ACT = {
   storeInvest(d) { storeInvest(d.id); },
   storeGm(d) { storeReplaceGm(d.id); },
   storeSell(d) { storeSell(d.id); },
-  speed(d) { UI.speed = +d.val; UI.paused = false; try { localStorage.setItem('de-speed', String(UI.speed)); } catch (e) { /* ignore */ } },
-  pause() { UI.paused = !UI.paused; },
   step1() { step(1); return 'skip'; },
   step7() { step(7); return 'skip'; },
   stepMonth() { step('month'); return 'skip'; },
@@ -594,8 +578,6 @@ function onKey(e) {
     return;
   }
   if (UI.screen !== 'game' || e.target.matches('input, select, textarea, button, summary') || UI.modal || blocked()) return;
-  if (e.key === ' ') { e.preventDefault(); UI.paused = !UI.paused; renderHud(); }
-  if (['1', '2', '3'].includes(e.key)) { UI.speed = +e.key; UI.paused = false; renderHud(); }
 }
 
 /* ---------- Boot ---------- */
@@ -603,9 +585,7 @@ async function start(data) {
   UI.hostTheme = document.documentElement.getAttribute('data-theme');
   try { UI.themePref = localStorage.getItem('de-theme') || 'system'; } catch (e) { UI.themePref = 'system'; }
   applyTheme();
-  try { UI.speed = +localStorage.getItem('de-speed') || 1; } catch (e) { UI.speed = 1; }
-  if (!SPEEDS[UI.speed]) UI.speed = 1;
-  UI.paused = false; UI.panel = null;
+  UI.panel = null;
   buildShell();
   const meta = await loadMeta();
   let bg = null;
@@ -622,6 +602,7 @@ async function start(data) {
   document.addEventListener('input', onInput);
   document.addEventListener('submit', onSubmit);
   document.addEventListener('keydown', onKey);
+  document.addEventListener('toggle', () => renderHudSoon(), true);
   document.addEventListener('focusout', () => setTimeout(() => { if (UI.viewDirty) renderViewSafe(); }, 0));
   window.addEventListener('pagehide', () => saveGame());
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveGame(); });

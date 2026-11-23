@@ -51,8 +51,8 @@ function brandColor() { return (S && S.color) || '#0a7480'; }
 
 /* ---------- parking slots ---------- */
 function buildSlots() {
-  const xs = (a, b) => { const out = []; for (let x = a; x <= b + 0.01; x += 1.05) if (Math.abs(x - MAP.pedX) > 0.7) out.push(round2(x)); return out; };
-  const L = xs(1.75, 20.9), R = xs(24.25, 44.2);
+  const xs = (a, b) => { const out = []; for (let x = a; x <= b + 0.01; x += 1.25) if (Math.abs(x - MAP.pedX) > 0.8) out.push(round2(x)); return out; };
+  const L = xs(1.8, 20.9), R = xs(24.3, 44.3);
   const slots = { new: [], used: [], park: [] };
   for (const [row, aisle] of [[MAP.rowC, MAP.aisleB], [MAP.rowB, MAP.aisleB], [MAP.rowA, MAP.aisleA]]) for (const x of L) slots.new.push({ gx: x, gy: row, aisle });
   for (const x of R) slots.park.push({ gx: x, gy: MAP.rowA, aisle: MAP.aisleA });
@@ -85,16 +85,26 @@ function entCar(id, ref, spot, color, opt = {}) {
 function entPerson(id, ref, gx, gy, look, opt = {}) {
   return { id, type: 'person', ref, gx, gy, look, path: [], speed: opt.speed || 1.7, delay: 0, walk: hrand(hashStr(id), 3) * 6, leaving: false, role: opt.role || 'customer', face: 1 };
 }
+/* Cars keep right: inbound and outbound use separate lanes of the driveway and aisles,
+   and only a few cars move at once. Anything beyond that fades in or out in place. */
+const MAX_MOVERS = 5, IN = 0.32, OUT = -0.32;
+function movers() { let n = 0; for (const e of Wd.ents.values()) if (e.type === 'car' && !e.ambient && e.path.length) n++; return n; }
+function fadeIn(e) { e.alpha = 0; e.fade = 'in'; e.path = []; e.delay = 0; }
+function fadeOut(e) { e.fade = 'out'; e.leaving = true; e.path = []; e.delay = 0; e.zt = 0; }
 function routeCarIn(e, target, aisle, delay = 0) {
+  if (movers() >= MAX_MOVERS) { e.gx = target.gx; e.gy = target.gy; e.dir = target.dir || 'y'; fadeIn(e); return false; }
   const fromW = Math.random() < 0.5;
   e.gx = fromW ? -3 : WORLD_W + 3; e.gy = fromW ? MAP.laneE : MAP.laneW; e.dir = 'x';
-  e.path = [[MAP.drvX, e.gy], [MAP.drvX, aisle], [target.gx, aisle], [target.gx, target.gy]];
+  e.path = [[MAP.drvX + 0.4, e.gy], [MAP.drvX + 0.4, aisle + IN], [target.gx, aisle + IN], [target.gx, target.gy]];
   e.delay = delay; e.final = target;
+  return true;
 }
 function routeCarOut(e, aisle, delay = 0) {
+  if (movers() >= MAX_MOVERS) { fadeOut(e); return false; }
   const east = Math.random() < 0.5;
-  e.path = [[e.gx, aisle], [MAP.drvX, aisle], [MAP.drvX, east ? MAP.laneE : MAP.laneW], [east ? WORLD_W + 4 : -4, east ? MAP.laneE : MAP.laneW]];
+  e.path = [[e.gx, aisle + OUT], [MAP.drvX - 0.4, aisle + OUT], [MAP.drvX - 0.4, east ? MAP.laneE : MAP.laneW], [east ? WORLD_W + 4 : -4, east ? MAP.laneE : MAP.laneW]];
   e.leaving = true; e.delay = delay; e.zt = 0;
+  return true;
 }
 function routeCarToBay(e, bay, delay = 0) {
   const c = MAP.canopy;
@@ -117,6 +127,38 @@ function syncWorld(initial) {
   if (!S) return;
   const ents = Wd.ents, seen = new Set();
   const live = !initial;
+  // Work out what should exist, and let everything else leave first so its stall is free
+  const want = new Set();
+  for (const v of availableNew()) want.add('v' + v.id);
+  for (const u of S.used) if (u.status === 'available' || u.status === 'appraisal') want.add('u' + u.id);
+  for (const r of S.svc.ros) if (r.status !== 'done') want.add('r' + r.id);
+  for (const v of visibleVisits()) want.add('w' + v.id);
+  for (const e of S.emps) if (e.status === 'active' && !e.absent) want.add('e' + e.id);
+  {
+    const seen = want;
+    let outN = 0;
+  for (const [id, e] of ents) {
+    if (seen.has(id) || e.leaving || e.ambient) continue;
+    if (e.type === 'car') {
+      if (e.ref.kind === 'new' || e.ref.kind === 'used') {
+        const deal = S.deals.find(d => d.day >= S.day - 1 && d.stock === e.stock);
+        const u = e.ref.kind === 'used' ? S.used.find(x => x.id === e.ref.id) : null;
+        if (deal && live) addFloat(e.gx, e.gy, `+${moneyK(deal.total)}`, deal.total >= 0 ? 'good' : 'bad', deal.by === 'You' ? 'Sold by you' : 'Sold');
+        else if (live) addFloat(e.gx, e.gy, u ? (u.status === 'recon' ? 'To recon' : u.status === 'auction' ? 'To auction' : 'Moved') : e.ref.kind === 'used' ? 'Wholesaled' : 'Dealer trade', 'info');
+      }
+      const aisle = e.bay != null ? MAP.aisleA : (Wd.slotOf[id] ? SLOTS[Wd.slotOf[id].kind][Wd.slotOf[id].i].aisle : (e.gy > 23 ? MAP.aisleB : MAP.aisleA));
+      freeSlot(id);
+      if (initial) { ents.delete(id); continue; }
+      if (e.bay != null) { e.bay = null; if (routeCarOut(e, MAP.aisleA, outN * 1.1)) e.path.unshift([e.gx, 15.9]); }
+      else if (e.gy < 17) { if (routeCarOut(e, MAP.aisleA, outN * 1.1)) e.path.splice(0, 1, [MAP.show.door, 16.0], [MAP.show.door, MAP.aisleA + OUT]); }
+      else routeCarOut(e, aisle, outN * 1.1);
+      outN++;
+    } else if (e.type === 'person') {
+      if (e.role === 'staff' || initial) { ents.delete(id); continue; }
+      routePersonOut(e, outN * 0.3); outN++;
+    }
+  }
+  }
   // New inventory: display pads first (most expensive), then the lot
   const avail = availableNew();
   Wd.display = Wd.display.filter(id => avail.some(v => v.id === id));
@@ -134,7 +176,7 @@ function syncWorld(initial) {
       if (di >= 0) spot = DISPLAY[di];
       else { const i = takeSlot('new', id); if (i < 0) continue; spot = SLOTS.new[i]; aisle = spot.aisle; }
       e = entCar(id, { kind: 'new', id: v.id }, spot, carColor(v), { tag: daysIn(v) > 90 ? 'aged' : null }); e.stock = v.stock;
-      if (live && v.arrived >= S.day - 1 && di < 0) routeCarIn(e, spot, aisle, arrivalN++ * 0.9);
+      if (live && v.arrived >= S.day - 1 && di < 0) routeCarIn(e, spot, aisle, arrivalN++ * 1.2);
       ents.set(id, e);
     } else e.tag = daysIn(v) > 90 ? 'aged' : null;
   }
@@ -147,7 +189,7 @@ function syncWorld(initial) {
       const i = takeSlot('used', id); if (i < 0) continue;
       const spot = SLOTS.used[i];
       e = entCar(id, { kind: 'used', id: u.id }, spot, carColor(u)); e.stock = u.stock;
-      if (live && u.acquired >= S.day - 1 && u.source === 'auction') routeCarIn(e, spot, spot.aisle, arrivalN++ * 0.9);
+      if (live && u.acquired >= S.day - 1 && u.source === 'auction') routeCarIn(e, spot, spot.aisle, arrivalN++ * 1.2);
       ents.set(id, e);
     }
     e.tag = u.status === 'appraisal' ? 'appraise' : daysIn(u) > 60 ? 'aged' : null;
@@ -165,8 +207,8 @@ function syncWorld(initial) {
     if (!e) {
       e = entCar(id, { kind: 'ro', id: ro.id }, { gx: 0, gy: 0 }, color);
       let b = -1; for (let i = 0; i < nb; i++) if (!bayTaken[i]) { b = i; break; }
-      if (b >= 0 && roN < nb) { bayTaken[b] = id; e.bay = b; const bp = bayPos(b); e.gx = bp.gx; e.gy = bp.gy; e.zt = 16; e.z = initial ? 16 : 0; if (live) { routeCarIn(e, { gx: 27.5, gy: 15.9 }, MAP.aisleA, roN * 0.6); e.path.push([bp.gx, 15.9], [bp.gx, bp.gy]); e.toBay = true; e.zt = 0; } }
-      else { const i = takeSlot('park', id); if (i < 0) continue; const sp = SLOTS.park[i]; e.gx = sp.gx; e.gy = sp.gy; if (live) routeCarIn(e, sp, sp.aisle, roN * 0.6); }
+      if (b >= 0 && roN < nb) { bayTaken[b] = id; e.bay = b; const bp = bayPos(b); e.gx = bp.gx; e.gy = bp.gy; e.zt = 16; e.z = initial ? 16 : 0; if (live) { if (routeCarIn(e, { gx: 27.5, gy: 15.9 }, MAP.aisleA, roN * 1.2)) { e.gx = e.gx; e.path.push([bp.gx, 15.9], [bp.gx, bp.gy]); e.toBay = true; e.zt = 0; } else { e.gx = bp.gx; e.gy = bp.gy; e.z = 16; e.zt = 16; } } }
+      else { const i = takeSlot('park', id); if (i < 0) continue; const sp = SLOTS.park[i]; e.gx = sp.gx; e.gy = sp.gy; if (live) routeCarIn(e, sp, sp.aisle, roN * 1.2); }
       ents.set(id, e); roN++;
     } else if (e.bay == null && !e.path.length) {
       let b = -1; for (let i = 0; i < nb; i++) if (!bayTaken[i]) { b = i; break; }
@@ -208,35 +250,14 @@ function syncWorld(initial) {
     if (!e) { e = entPerson(id, { kind: 'emp', id: emp.id }, gx, gy, lookOf(emp.id, { uniform: uni }), { role: 'staff' }); ents.set(id, e); }
     else if (!e.path.length && (Math.abs(e.gx - gx) > 0.05 || Math.abs(e.gy - gy) > 0.05)) e.path = [[gx, gy]];
   }
-  // Anything that is no longer in the simulation leaves the world
-  let outN = 0;
-  for (const [id, e] of ents) {
-    if (seen.has(id) || e.leaving || e.ambient) continue;
-    if (e.type === 'car') {
-      if (e.ref.kind === 'new' || e.ref.kind === 'used') {
-        const deal = S.deals.find(d => d.day >= S.day - 1 && d.stock === e.stock);
-        const u = e.ref.kind === 'used' ? S.used.find(x => x.id === e.ref.id) : null;
-        if (deal && live) addFloat(e.gx, e.gy, `+${moneyK(deal.total)}`, deal.total >= 0 ? 'good' : 'bad', deal.by === 'You' ? 'Sold by you' : 'Sold');
-        else if (live) addFloat(e.gx, e.gy, u ? (u.status === 'recon' ? 'To recon' : u.status === 'auction' ? 'To auction' : 'Moved') : e.ref.kind === 'used' ? 'Wholesaled' : 'Dealer trade', 'info');
-      }
-      freeSlot(id);
-      if (initial) { ents.delete(id); continue; }
-      const aisle = e.bay != null ? MAP.aisleA : (Wd.slotOf[id] ? SLOTS[Wd.slotOf[id].kind][Wd.slotOf[id].i].aisle : (e.gy > 23 ? MAP.aisleB : MAP.aisleA));
-      if (e.bay != null) { e.bay = null; routeCarOut(e, MAP.aisleA, outN * 0.5); e.path.unshift([e.gx, 15.9]); }
-      else if (e.gy < 17) { routeCarOut(e, MAP.aisleA, outN * 0.5); e.path.splice(0, 1, [MAP.show.door, 16.0], [MAP.show.door, MAP.aisleA]); }
-      else routeCarOut(e, aisle, outN * 0.5);
-      outN++;
-    } else if (e.type === 'person') {
-      if (e.role === 'staff' || initial) { ents.delete(id); continue; }
-      routePersonOut(e, outN * 0.3); outN++;
-    }
-  }
 }
 function addFloat(gx, gy, text, tone, sub) { Wd.floats.push({ gx, gy, text, tone, sub, t: 0 }); }
 
 /* ---------- animation ---------- */
 function stepEnts(dt) {
   for (const [id, e] of Wd.ents) {
+    if (e.fade === 'in') { e.alpha = Math.min(1, (e.alpha || 0) + dt * 1.2); if (e.alpha >= 1) { e.fade = null; e.alpha = 1; } }
+    if (e.fade === 'out') { e.alpha = (e.alpha == null ? 1 : e.alpha) - dt * 1.2; if (e.alpha <= 0) Wd.ents.delete(id); continue; }
     if (e.delay > 0) { e.delay -= dt; continue; }
     if (e.type === 'car') e.z += (e.zt - e.z) * Math.min(1, dt * 3);
     if (!e.path.length) {
@@ -257,10 +278,10 @@ function stepEnts(dt) {
   // passing traffic on the road
   Wd.trafficT -= dt;
   if (Wd.trafficT <= 0) {
-    Wd.trafficT = randUI(1.2, 3.5);
+    Wd.trafficT = randUI(1.8, 4.2);
     const east = Math.random() < 0.5, id = 'amb' + Math.random().toString(36).slice(2, 8);
     const e = entCar(id, { kind: 'amb' }, { gx: east ? -4 : WORLD_W + 4, gy: east ? MAP.laneE : MAP.laneW, dir: 'x' }, PAINTS[Math.floor(Math.random() * PAINTS.length)]);
-    e.path = [[east ? WORLD_W + 5 : -5, e.gy]]; e.speed = randUI(5, 7.5); e.leaving = true; e.ambient = true;
+    e.path = [[east ? WORLD_W + 5 : -5, e.gy]]; e.speed = 6; e.leaving = true; e.ambient = true;
     if (Math.random() < 0.1) e.truck = true;
     Wd.ents.set(id, e);
     if (Math.random() < 0.35) {
@@ -422,7 +443,7 @@ function drawGround(c) {
   c.setLineDash([]);
   // parking stall lines
   c.strokeStyle = 'rgba(255,255,255,.7)'; c.lineWidth = 1.4;
-  const stall = s => { for (const dx of [-0.52, 0.52]) { const a = P(s.gx + dx, s.gy - 0.95), b = P(s.gx + dx, s.gy + 0.95); c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke(); } };
+  const stall = s => { for (const dx of [-0.62, 0.62]) { const a = P(s.gx + dx, s.gy - 0.9), b = P(s.gx + dx, s.gy + 0.9); c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke(); } };
   SLOTS.new.forEach(stall); SLOTS.park.forEach(stall); SLOTS.used.forEach(stall);
   // lot labels painted on the asphalt
   c.save(); c.globalAlpha = 0.55;
@@ -435,10 +456,11 @@ function wallGroundText(c, x, y, t) { const [sx, sy] = P(x, y, 0); c.save(); c.t
 
 /* ---------- dynamic drawing ---------- */
 function drawCar(c, e) {
-  const hl = e.truck ? 1.6 : 0.86, hw = e.truck ? 0.55 : 0.4;
+  const hl = e.truck ? 1.6 : 0.72, hw = e.truck ? 0.55 : 0.3;
   const [hx, hy] = e.dir === 'x' ? [hl, hw] : [hw, hl];
   const x0 = e.gx - hx, x1 = e.gx + hx, y0 = e.gy - hy, y1 = e.gy + hy, z = e.z || 0;
-  c.globalAlpha = 0.22; poly(c, quad(x0, y0 + 0.08, x1 + 0.12, y1 + 0.14, 0), '#000'); c.globalAlpha = 1;
+  const A = e.alpha == null ? 1 : e.alpha;
+  c.globalAlpha = 0.2 * A; poly(c, quad(x0, y0 + 0.06, x1 + 0.1, y1 + 0.1, 0), '#000'); c.globalAlpha = A;
   if (z > 2) { box(c, x0 + 0.2, y0 + 0.3, x1 - 0.2, y1 - 0.3, z - 3, z, { base: '#3f78b5' }); }
   box(c, x0 + 0.08, y0 + 0.06, x1 - 0.08, y1 - 0.06, z, z + 4, { base: '#1b1e22' });
   if (e.truck) {
@@ -447,9 +469,9 @@ function drawCar(c, e) {
     box(c, cab[0], cab[1], cab[2], cab[3], z + 3, z + 20, { base: e.color });
     return;
   }
-  box(c, x0, y0, x1, y1, z + 3, z + 11, { base: e.color, line: 'rgba(0,0,0,.12)' });
-  const ci = e.dir === 'x' ? [x0 + 0.42, y0 + 0.07, x1 - 0.36, y1 - 0.07] : [x0 + 0.07, y0 + 0.42, x1 - 0.07, y1 - 0.36];
-  box(c, ci[0], ci[1], ci[2], ci[3], z + 11, z + 18, { top: shade(e.color, 0.08), left: '#2b3a47', right: '#1e2933' });
+  box(c, x0, y0, x1, y1, z + 3, z + 9.5, { base: e.color, line: 'rgba(0,0,0,.12)' });
+  const ci = e.dir === 'x' ? [x0 + 0.34, y0 + 0.05, x1 - 0.3, y1 - 0.05] : [x0 + 0.05, y0 + 0.34, x1 - 0.05, y1 - 0.3];
+  box(c, ci[0], ci[1], ci[2], ci[3], z + 9.5, z + 15, { top: shade(e.color, 0.08), left: '#2b3a47', right: '#1e2933' });
   if (e.tag && !e.moving) {
     const [sx, sy] = P(e.gx, e.gy, z + 30);
     const col = e.tag === 'aged' ? '#d08a2c' : '#2a67ad';
@@ -500,7 +522,7 @@ function worldFrame(ts) {
   if (!Wd.cv || !S) return;
   const dt = Math.min(0.1, (ts - (Wd.last || ts)) / 1000); Wd.last = ts;
   const running = UI.screen !== 'game' || canRun();
-  const mul = UI.screen !== 'game' ? 0.6 : running ? [1, 1, 1.6, 2.6][UI.speed] || 1 : 0;
+  const mul = UI.screen !== 'game' ? 0.6 : running ? 1 : 0;
   Wd.time += dt * mul;
   Wd.syncT -= dt;
   if (Wd.syncT <= 0) { syncWorld(false); Wd.syncT = 0.25; }
@@ -523,10 +545,10 @@ function draw() {
   for (const e of Wd.ents.values()) {
     if (e.delay > 0 && e.path.length && (e.gx < -2 || e.gx > WORLD_W + 2)) continue;
     const k = e.gx + e.gy + (e.type === 'car' ? 0.45 : 0.05);
-    items.push({ k, f: cc => { if (e.type === 'car') drawCar(cc, e); else drawPerson(cc, e); } });
+    items.push({ k, f: cc => { if (e.type === 'car') { drawCar(cc, e); cc.globalAlpha = 1; } else drawPerson(cc, e); } });
     if (!e.ambient && !e.leaving) {
       const [sx, sy] = P(e.gx, e.gy, e.z || 0);
-      Wd.hits.push(e.type === 'car' ? { x: sx - 34, y: sy - 34, w: 68, h: 42, e, k } : { x: sx - 9, y: sy - 46, w: 18, h: 48, e, k: k + 10 });
+      Wd.hits.push(e.type === 'car' ? { x: sx - 28, y: sy - 28, w: 56, h: 36, e, k } : { x: sx - 9, y: sy - 46, w: 18, h: 48, e, k: k + 10 });
     }
   }
   items.sort((a, b) => a.k - b.k);
@@ -535,7 +557,7 @@ function draw() {
   if (Wd.hover && Wd.hover.e) {
     const e = Wd.hover.e, [sx, sy] = P(e.gx, e.gy, 0);
     c.strokeStyle = '#ffffff'; c.lineWidth = 2; c.setLineDash([4, 3]);
-    c.beginPath(); c.ellipse(sx, sy, e.type === 'car' ? 38 : 11, e.type === 'car' ? 19 : 5.5, 0, 0, Math.PI * 2); c.stroke(); c.setLineDash([]);
+    c.beginPath(); c.ellipse(sx, sy, e.type === 'car' ? 32 : 11, e.type === 'car' ? 16 : 5.5, 0, 0, Math.PI * 2); c.stroke(); c.setLineDash([]);
   }
   drawFloats(c);
   // light: warm morning, dusk toward closing, night between days

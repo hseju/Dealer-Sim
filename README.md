@@ -15,7 +15,7 @@ python3 -m http.server 8000
 # then open http://localhost:8000
 ```
 
-Start from the title screen: open a new dealership (name, sign colour, difficulty, save slot) or continue a saved one. Days play out in the world — customers walk in, cars are delivered and driven away, the shop works through its repair orders, and the light changes toward closing time. Pause or pick a speed at the top right (space bar pauses, 1–3 set the speed); decisions, month-end results and conversations pause the game until you deal with them. The calendar button skips ahead a day, a week or to month-end. Twelve career goals guide you from stocking the lot to running a dealer group.
+Start from the title screen: open a new dealership (name, sign colour, difficulty, save slot) or continue a saved one. There are no time controls: the dealership simply runs. Customers walk in, delivery trucks drop off cars, sold cars drive away, the shop works through its repair orders and the light changes toward closing. The game pauses by itself whenever you open a window, talk to a customer or have a decision to make. Twelve career goals guide you from stocking the lot to running a dealer group.
 
 The game saves to one of three slots in your browser (IndexedDB) every week, at month-end, after decisions and when you leave the page.
 

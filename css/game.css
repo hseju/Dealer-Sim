@@ -210,7 +210,7 @@ body { overflow: hidden; background: #6f9a58; }
   .goal small { display: none; }
   .tool { min-width: 58px; font-size: 10.5px; }
   .pwin { inset: 0; border-radius: 0; z-index: 50; padding-top: env(safe-area-inset-top, 0px); }
-  .paused-tag { top: calc(118px + env(safe-area-inset-top, 0px)); }
+  #toasts { top: calc(128px + env(safe-area-inset-top, 0px)); bottom: auto; left: max(12px, env(safe-area-inset-left, 0px)); right: max(12px, env(safe-area-inset-right, 0px)); max-width: none; }
   .modal.scene-modal { width: 100vw; height: 100%; max-height: none; border-radius: 0; top: 0; left: 0; transform: none; animation-name: fade; }
   .dc-nums, .end-nums { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .title-logo h1 { font-size: 32px; }
