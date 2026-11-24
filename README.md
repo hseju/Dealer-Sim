@@ -6,6 +6,22 @@ The game is played on an animated isometric view of your dealership. Every car o
 
 All brands, models, people and companies in the game are fictional.
 
+## Story mode — Act 1: The Service Drive
+
+For players who know nothing about dealerships. Aunt May leaves you her struggling Aurex store; Rosa, the service manager who is about to retire, teaches you how a service department makes money before the bank's deadline. Seven short chapters, one idea each:
+
+| # | Chapter | What you learn |
+|---|---|---|
+| 1 | Your first customer | A quote is hours × labour rate + parts |
+| 2 | Busy Saturday | Bays and techs limit how many cars you can fix; long waits lose customers |
+| 3 | The corner garage | Your price vs. a cheaper competitor, and how trust changes it |
+| 4 | Out of stock | No part, no repair — but stock is money already spent |
+| 5 | The recall letter | The brand pays for recalls; honest inspections earn trust (and money) |
+| 6 | Bring them back | Reminding happy customers brings them back |
+| 7 | The bank's deadline | Profit = money in − wages, rent and parts |
+
+You play on a close-up of the service building: tap a car at the service drive to write the quote, tap a waiting car to send it into a bay, tap the parts wall to order. Each chapter scores up to three stars and adds a card to your Playbook, with the real industry term for what you just learned. Free play (the whole dealership) is still on the title screen.
+
 ## Play
 
 No build step and no dependencies. Serve the folder with any static web server and open `index.html`:
@@ -69,7 +85,9 @@ Plain classic scripts sharing one global scope, loaded in order by `index.html`:
 - `js/world.js` — the isometric dealership: drawing, animation, camera, clicking
 - `js/art.js` — character looks and expressive portraits
 - `js/ui-deal.js` — the face-to-face deal scene
+- `js/story.js` — story mode: chapters, the service scene, Rosa, the Playbook
 - `js/ui-*.js` — management windows and charts
 - `js/main.js` — title screen, save slots, HUD, toolbar, goals, time, input
 - `css/styles.css` — theme tokens (light and dark) and window layout
 - `css/game.css` — HUD, toolbar, title screen and deal scene
+- `css/story.css` — story mode screens

@@ -51,7 +51,7 @@ function buildShell() {
     <canvas id="world" aria-label="Your dealership. Click customers, cars and buildings."></canvas>
     <div class="hud" id="hud"></div>
     <div id="pwin"></div>
-  </div><div id="title"></div><div id="overlay"></div><div id="drawer"></div><div id="toasts" aria-live="polite"></div><div id="tip" role="tooltip"></div>`;
+  </div><div id="story"></div><div id="title"></div><div id="overlay"></div><div id="drawer"></div><div id="toasts" aria-live="polite"></div><div id="tip" role="tooltip"></div>`;
 }
 function renderHud() {
   const hud = document.getElementById('hud'); if (!hud || !S) return;
@@ -145,7 +145,7 @@ function renderOverlay() {
   } else d.innerHTML = '';
 }
 function render() {
-  renderTitle(); renderHud(); renderPanel(); renderOverlay(); renderToasts();
+  renderTitle(); renderHud(); renderPanel(); renderOverlay(); renderStory(); renderToasts();
   if (UI.focus) { const el = document.getElementById(UI.focus); if (el) { el.focus(); if (el.setSelectionRange && el.type === 'search') { const n = el.value.length; el.setSelectionRange(n, n); } } UI.focus = null; }
 }
 function renderViewSafe() {
@@ -178,9 +178,12 @@ function renderTitle() {
       <div class="title-actions"><button type="button" class="btn ghost" data-act="titleView" data-val="main">Back</button></div></div>`;
   } else {
     body = `<div class="title-menu">
-      ${act ? `<button type="button" class="tbtn primary" data-act="loadSlot" data-val="${meta.active}"><b>Continue</b><small>${esc(act.name)} · ${fmtDate(act.day)} · ${moneyK(act.cash)}</small></button>` : ''}
-      <button type="button" class="tbtn ${act ? '' : 'primary'}" data-act="titleView" data-val="new"><b>New dealership</b><small>Take over a struggling Aurex store</small></button>
-      <button type="button" class="tbtn" data-act="titleView" data-val="load" ${Object.keys(meta.slots).length ? '' : 'disabled'}><b>Load game</b><small>${Object.keys(meta.slots).length} saved</small></button>
+      <span class="title-k">Story · learn the business</span>
+      <button type="button" class="tbtn primary" data-act="storyStart"><b>Save Aunt May's dealership</b><small>${esc(storyProgressLabel())}</small></button>
+      <span class="title-k">Free play · run the whole dealership</span>
+      ${act ? `<button type="button" class="tbtn" data-act="loadSlot" data-val="${meta.active}"><b>Continue</b><small>${esc(act.name)} · ${fmtDate(act.day)} · ${moneyK(act.cash)}</small></button>` : ''}
+      <div class="tbtn-row"><button type="button" class="tbtn" data-act="titleView" data-val="new"><b>New dealership</b><small>Every department at once</small></button>
+      <button type="button" class="tbtn" data-act="titleView" data-val="load" ${Object.keys(meta.slots).length ? '' : 'disabled'}><b>Load game</b><small>${Object.keys(meta.slots).length} saved</small></button></div>
     </div>`;
   }
   el.innerHTML = `<div class="title-screen"><div class="title-card">
@@ -462,8 +465,8 @@ const ACT = {
   step7() { step(7); return 'skip'; },
   stepMonth() { step('month'); return 'skip'; },
   saveNow() { saveGame(true); },
-  toTitle() { saveGame(); UI.screen = 'title'; UI.titleView = 'main'; UI.panel = null; UI.drawer = null; UI.modal = null; loadMeta().then(render); },
-  recenter() { fitCamera(); },
+  toTitle() { saveGame(); UI.screen = 'title'; UI.titleView = 'main'; UI.panel = null; UI.drawer = null; UI.modal = null; ST.menu = false; ST.modal = null; ST.run = null; fitCamera(); loadMeta().then(render); return 'skip'; },
+  recenter() { if (isStory()) stFitCamera(); else fitCamera(); },
   titleView(d) { UI.titleView = d.val; },
   loadSlot(d) { loadSlot(+d.val); return 'skip'; },
   delSlot(d) {
@@ -480,6 +483,7 @@ const ACT = {
     applyTheme();
   },
   ...DEAL_ACT,
+  ...STORY_ACT,
 };
 const CHG = {
   ad(el) { S.settings.ad = +el.value; },
@@ -571,6 +575,7 @@ function onSubmit(e) {
 }
 function onKey(e) {
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role="button"][data-act]')) { e.preventDefault(); e.target.click(); return; }
+  if (e.key === 'Escape' && isStory()) { if (ST.modal === 'playbook' || ST.modal === 'parts' || (ST.modal && ST.modal.kind === 'writeup')) { ST.modal = null; render(); } else if (ST.menu) { ST.menu = false; render(); } return; }
   if (e.key === 'Escape') {
     if (UI.drawer) { UI.drawer = null; render(); }
     else if (UI.modal) { if (UI.modal === 'neg') ACT.closeNeg(); else UI.modal = null; render(); }
@@ -588,6 +593,7 @@ async function start(data) {
   UI.panel = null;
   buildShell();
   const meta = await loadMeta();
+  await storyLoad();
   let bg = null;
   if (data && data.state) { S = data.state; UI.slot = data.slot || meta.active || 1; UI.screen = 'game'; prepareState(); }
   else {

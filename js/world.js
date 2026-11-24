@@ -521,6 +521,7 @@ function worldFrame(ts) {
   requestAnimationFrame(worldFrame);
   if (!Wd.cv || !S) return;
   const dt = Math.min(0.1, (ts - (Wd.last || ts)) / 1000); Wd.last = ts;
+  if (isStory()) { storyFrame(dt); return; }
   const running = UI.screen !== 'game' || canRun();
   const mul = UI.screen !== 'game' ? 0.6 : running ? 1 : 0;
   Wd.time += dt * mul;
@@ -642,7 +643,7 @@ function clickHit(h) {
 function initWorld(canvas) {
   Wd.cv = canvas; Wd.ctx = canvas.getContext('2d');
   resizeWorld();
-  window.addEventListener('resize', () => { const was = Wd.vw; resizeWorld(); if (Math.abs(was - Wd.vw) > 120) fitCamera(); });
+  window.addEventListener('resize', () => { const was = Wd.vw; resizeWorld(); if (Math.abs(was - Wd.vw) > 120) { if (isStory()) stFitCamera(); else fitCamera(); } });
   const tip = document.getElementById('tip');
   canvas.addEventListener('pointerdown', e => {
     canvas.setPointerCapture(e.pointerId);
@@ -664,6 +665,13 @@ function initWorld(canvas) {
       if (Math.abs(dx) + Math.abs(dy) > 5) Wd.drag.moved = true;
       if (Wd.drag.moved) { Wd.cam.x = Wd.drag.cx + dx; Wd.cam.y = Wd.drag.cy + dy; canvas.style.cursor = 'grabbing'; tip.classList.remove('on'); return; }
     }
+    if (UI.screen === 'story') {
+      const h = storyHitAt(px, py); Wd.hover = h;
+      canvas.style.cursor = h ? 'pointer' : 'grab';
+      const lbl = storyLabel(h);
+      if (lbl) { tip.innerHTML = lbl; tip.classList.add('on'); tip.style.transform = `translate(${e.clientX + 14}px, ${e.clientY + 16}px)`; } else tip.classList.remove('on');
+      return;
+    }
     if (UI.screen !== 'game') return;
     const h = hitAt(px, py);
     Wd.hover = h;
@@ -678,6 +686,7 @@ function initWorld(canvas) {
     Wd.ptr.delete(e.pointerId);
     if (Wd.ptr.size < 2) Wd.pinch = null;
     if (Wd.ptr.size === 0) { Wd.drag = null; canvas.style.cursor = 'grab'; }
+    if (!wasDrag && e.type === 'pointerup' && UI.screen === 'story') { tip.classList.remove('on'); storyClick(storyHitAt(e.clientX - r.left, e.clientY - r.top)); return; }
     if (!wasDrag && e.type === 'pointerup' && UI.screen === 'game') { tip.classList.remove('on'); clickHit(hitAt(e.clientX - r.left, e.clientY - r.top)); }
   };
   canvas.addEventListener('pointerup', end);

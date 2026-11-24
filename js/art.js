@@ -27,12 +27,13 @@ function lookOf(id, opt = {}) {
     glasses: r(6) < 0.22,
     beard: r(7) < 0.18,
     height: 0.92 + r(9) * 0.14,
+    ...(opt.look || {}),
   };
 }
 
 /* Portrait SVG. mood 0..100 drives the expression. */
 function portrait(id, mood = 60, opt = {}) {
-  const L = lookOf(id, opt);
+  const L = lookOf(id, opt.look ? opt : (STORY_LOOKS[id] ? { look: STORY_LOOKS[id], uniform: STORY_LOOKS[id].shirt } : opt));
   const m = clamp(mood, 0, 100);
   const smile = (m - 50) / 50; // -1 .. 1
   const mouthY = 86, mw = 12;
@@ -65,3 +66,13 @@ function portrait(id, mood = 60, opt = {}) {
     ${m > 70 ? `<ellipse cx="42" cy="76" rx="5" ry="3" fill="#e46a6a" opacity=".25"/><ellipse cx="78" cy="76" rx="5" ry="3" fill="#e46a6a" opacity=".25"/>` : ''}
   </svg>`;
 }
+
+/* Named story characters */
+const STORY_LOOKS = {
+  rosa: { skin: '#d9a37e', hair: '#9a9a9a', hairStyle: 3, shirt: '#1f3b57', glasses: true, beard: false },
+  may: { skin: '#f6d7c3', hair: '#cfcfcf', hairStyle: 4, shirt: '#8a4f6d', glasses: true, beard: false },
+  vic: { skin: '#eec3a0', hair: '#3b2a20', hairStyle: 5, shirt: '#e08a1e', glasses: false, beard: true },
+  mike: { skin: '#9a5f41', hair: '#1f1a17', hairStyle: 5, shirt: '#2f5f8a', glasses: false, beard: true },
+  jess: { skin: '#f6d7c3', hair: '#b8432c', hairStyle: 2, shirt: '#2f5f8a', glasses: false, beard: false },
+  sam: { skin: '#bf8160', hair: '#1f1a17', hairStyle: 1, shirt: '#2f5f8a', glasses: true, beard: false },
+};
