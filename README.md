@@ -22,6 +22,8 @@ For players who know nothing about dealerships. Aunt May leaves you her struggli
 
 You play on a close-up of the service building: tap a car at the service drive to write the quote, tap a waiting car to send it into a bay, tap the parts wall to order. Each chapter scores up to three stars and adds a card to your Playbook, with the real industry term for what you just learned. Free play (the whole dealership) is still on the title screen.
 
+Story progress is saved after every chapter, and a chapter in progress is checkpointed as you play, so you can close the page and pick up from *Continue where you left off* on the chapter map. When the game runs as a Claude artifact, progress is saved privately to your Claude account as well as in the browser; the copies are merged on load, so losing browser storage does not lose progress.
+
 ## Play
 
 No build step and no dependencies. Serve the folder with any static web server and open `index.html`:

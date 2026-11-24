@@ -465,7 +465,7 @@ const ACT = {
   step7() { step(7); return 'skip'; },
   stepMonth() { step('month'); return 'skip'; },
   saveNow() { saveGame(true); },
-  toTitle() { saveGame(); UI.screen = 'title'; UI.titleView = 'main'; UI.panel = null; UI.drawer = null; UI.modal = null; ST.menu = false; ST.modal = null; ST.run = null; fitCamera(); loadMeta().then(render); return 'skip'; },
+  toTitle() { saveGame(); if (UI.screen === 'story') stFlush(); UI.screen = 'title'; UI.titleView = 'main'; UI.panel = null; UI.drawer = null; UI.modal = null; ST.menu = false; ST.modal = null; ST.run = null; fitCamera(); loadMeta().then(render); return 'skip'; },
   recenter() { if (isStory()) stFitCamera(); else fitCamera(); },
   titleView(d) { UI.titleView = d.val; },
   loadSlot(d) { loadSlot(+d.val); return 'skip'; },
@@ -610,8 +610,8 @@ async function start(data) {
   document.addEventListener('keydown', onKey);
   document.addEventListener('toggle', () => renderHudSoon(), true);
   document.addEventListener('focusout', () => setTimeout(() => { if (UI.viewDirty) renderViewSafe(); }, 0));
-  window.addEventListener('pagehide', () => saveGame());
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveGame(); });
+  window.addEventListener('pagehide', () => { saveGame(); if (UI.screen === 'story') stFlush(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { saveGame(); if (UI.screen === 'story') stFlush(); } });
   if (window.claude && window.claude.hot && window.claude.hot.snapshot) window.claude.hot.snapshot(() => (UI.screen === 'game' ? { state: S, slot: UI.slot } : {}));
   render();
   startClock();

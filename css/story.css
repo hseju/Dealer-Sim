@@ -189,7 +189,7 @@
 .node button:hover:not(:disabled) { border-color: var(--sb-teal); transform: translateX(2px); }
 .node .num { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; background: var(--sb-paper-2); border: 3px solid var(--sb-line); font-family: var(--font-display); font-size: 22px; font-weight: 700; color: var(--sb-ink-2); z-index: 1; }
 .node .num .ic { width: 20px; height: 20px; }
-.node.done .num { background: var(--sb-teal); border-color: var(--sb-teal); color: #fff; }
+.node.cleared .num { background: var(--sb-teal); border-color: var(--sb-teal); color: #fff; }
 .node.current .num { background: var(--sb-amber); border-color: #e09d12; color: #3b2600; box-shadow: 0 0 0 6px rgba(242, 182, 50, .3); }
 .node.current button { border-color: var(--sb-amber); }
 .node .nt b { display: block; font-family: var(--font-display); font-size: 19px; }
@@ -198,6 +198,15 @@
 .nstars i { font-style: normal; color: #e2dccf; } .nstars i.on { color: var(--sb-amber); }
 .node.locked button { opacity: .55; cursor: not-allowed; }
 .node.act2 button { background: var(--sb-paper-2); border-style: dashed; }
+.sm-continue { width: 100%; display: grid; grid-template-columns: 52px 1fr auto; gap: 12px; align-items: center; margin: 0 0 14px; padding: 10px 14px 10px 4px; border: 2px solid var(--sb-teal); border-radius: 18px; background: #e6f3f2; color: var(--sb-ink); text-align: left; cursor: pointer; }
+.sm-continue:hover { transform: translateX(2px); }
+.sm-continue .num { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; background: var(--sb-teal); color: #fff; font-family: var(--font-display); font-size: 22px; font-weight: 700; }
+.sm-continue .nt b { display: block; font-family: var(--font-display); font-size: 19px; }
+.sm-continue .nt small { color: var(--sb-ink-2); }
+.sm-continue .go { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--sb-teal); color: #fff; }
+.sm-continue .go .ic { width: 18px; height: 18px; }
+.sm-save { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 14px 0 0; font-size: 12.5px; color: var(--sb-ink-2); }
+.sm-save .ic { width: 14px; height: 14px; color: var(--sb-teal); }
 .title-k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .12em; color: var(--hud-fg-2); font-weight: 700; margin-top: 6px; }
 .tbtn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 

@@ -89,7 +89,7 @@ const SM = {
   seats: [[22.7, 3.4], [23.9, 3.4], [25.1, 3.4], [26.3, 3.4], [22.7, 5.3], [23.9, 5.3], [25.1, 5.3], [26.3, 5.3], [24.5, 7.1], [25.7, 7.1]],
   vic: { x0: 2.4, y0: 21.2, x1: 8.6, y1: 23.6 }, vicPark: [[3.3, 24.8], [4.7, 24.8], [6.1, 24.8], [7.5, 24.8]],
 };
-const ST = { save: null, run: null, ents: new Map(), floats: [], hits: [], hover: null, statics: null, sig: '', modal: null, menu: false, tip: null, page: 0, time: 0, trafficT: 1, inited: false };
+const ST = { save: null, cp: null, cpTimer: null, run: null, ents: new Map(), floats: [], hits: [], hover: null, statics: null, sig: '', modal: null, menu: false, tip: null, page: 0, time: 0, trafficT: 1, inited: false };
 const STORY_BRAND = '#0a7480';
 
 /* ---------- small helpers ---------- */
@@ -125,18 +125,159 @@ function moodColor(p) { return p > 0.6 ? '#2f9e5b' : p > 0.3 ? '#e0a92e' : '#d94
 function chapterDef(n) { return CHAPTERS.find(c => c.n === n); }
 function stRate() { return ST.run ? ST.run.rate : 120; }
 
-/* ---------- persistence ---------- */
+/* ---------- persistence ----------
+   Story progress is kept in three places and merged on load, so a lost copy never loses progress:
+   the player's Claude account (private per-viewer db doc, when the page runs inside Claude),
+   IndexedDB, and localStorage. A chapter in progress is checkpointed on every real change. */
+const ST_LS = 'dealer-empire-story', ST_RUN_LS = 'dealer-empire-story-run';
+const Cloud = { ready: null, sync: null, db: null, uid: null, last: {}, next: {}, busy: {}, cpT: 0, cpTimer: null, ok: false };
+function storyDefault() { return { v: 1, stars: {}, cards: [], roster: [], seenIntro: false, act1: false, remind: false, rate: 120, at: 0, endAt: 0 }; }
+function lsGet(k) { try { const s = localStorage.getItem(k); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
+function lsPut(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+function timeout(p, ms) { return Promise.race([p, new Promise(r => setTimeout(() => r(null), ms))]); }
+function cloudInit() {
+  if (Cloud.ready) return Cloud.ready;
+  Cloud.ready = (async () => {
+    for (let i = 0; i < 12 && !(window.claude && typeof window.claude.use === 'function'); i++) await new Promise(r => setTimeout(r, 250));
+    const cl = window.claude; if (!cl || typeof cl.use !== 'function') return false;
+    try {
+      const [db, user] = await Promise.all([cl.use('db'), cl.use('user')]);
+      const uid = db && user ? await user.id() : null;
+      if (!db || !uid) return false;
+      Cloud.db = db; Cloud.uid = uid; return true;
+    } catch (e) { return false; }
+  })();
+  return Cloud.ready;
+}
+function cloudRef(key) { return Cloud.db.doc('data/users/' + Cloud.uid + '/' + key); }
+async function cloudGet(key) {
+  if (!Cloud.db) return null;
+  for (let i = 0; i < 2; i++) {
+    try { const s = await timeout(cloudRef(key).get(), 10000); if (!s) return null; const d = s.exists ? JSON.parse(JSON.stringify(s.data())) : null; Cloud.last[key] = d ? JSON.stringify(d) : null; return d; }
+    catch (e) { if (!e || e.code !== 'unavailable' || i) return null; await new Promise(r => setTimeout(r, 500 + Math.random() * 800)); }
+  }
+  return null;
+}
+// one write at a time per document, and only when the data changed; a burst collapses into the latest value
+function cloudPut(key, data) {
+  if (!Cloud.db) return Promise.resolve(false);
+  const body = data == null ? null : JSON.stringify(data);
+  if (body === Cloud.last[key] && !Cloud.busy[key]) return Promise.resolve(true);
+  return new Promise(resolve => {
+    Cloud.next[key] = { body, waiters: [...((Cloud.next[key] && Cloud.next[key].waiters) || []), resolve] };
+    if (Cloud.busy[key]) return;
+    Cloud.busy[key] = true;
+    (async () => {
+      while (Cloud.next[key]) {
+        const job = Cloud.next[key]; delete Cloud.next[key];
+        let ok = job.body === Cloud.last[key];
+        for (let i = 0; !ok && i < 2 && Cloud.db; i++) {
+          try { const ref = cloudRef(key); if (job.body == null) await ref.delete(); else await ref.set(JSON.parse(job.body)); Cloud.last[key] = job.body; ok = true; Cloud.ok = true; }
+          catch (e) {
+            const code = e && e.code;
+            if (code === 'revoked') { Cloud.db = null; break; }
+            if (code !== 'unavailable' && code !== 'resource_exhausted') break;
+            await new Promise(r => setTimeout(r, (code === 'unavailable' ? 600 : 4000) + Math.random() * 900));
+          }
+        }
+        job.waiters.forEach(w => w(ok));
+      }
+      Cloud.busy[key] = false;
+    })();
+  });
+}
+function mergeSaves(list) {
+  const out = storyDefault();
+  const saves = list.filter(s => s && typeof s === 'object' && s.stars);
+  if (!saves.length) return out;
+  const newest = saves.reduce((a, b) => ((b.at || 0) > (a.at || 0) ? b : a));
+  for (const s of saves) {
+    for (const [k, v] of Object.entries(s.stars || {})) out.stars[k] = Math.max(out.stars[k] || 0, +v || 0);
+    for (const c of s.cards || []) if (!out.cards.includes(c)) out.cards.push(c);
+    out.seenIntro = out.seenIntro || !!s.seenIntro; out.act1 = out.act1 || !!s.act1;
+    out.at = Math.max(out.at, s.at || 0); out.endAt = Math.max(out.endAt, s.endAt || 0);
+  }
+  out.remind = !!newest.remind; out.rate = newest.rate || 120;
+  const seen = new Set();
+  for (const s of [newest, ...saves.filter(s => s !== newest)]) for (const r of s.roster || []) if (r && !seen.has(r.rid)) { seen.add(r.rid); out.roster.push({ ...r }); }
+  if (out.roster.length > 40) out.roster.splice(0, out.roster.length - 40);
+  return JSON.parse(JSON.stringify(out));
+}
+function newestCheckpoint(list, save) {
+  const ok = list.filter(c => c && c.run && chapterDef(c.n) && (c.at || 0) > ((save && save.endAt) || 0));
+  return ok.length ? ok.reduce((a, b) => ((b.at || 0) > (a.at || 0) ? b : a)) : null;
+}
 async function storyLoad() {
-  try { ST.save = await idbGet('story'); } catch (e) { ST.save = null; }
-  if (!ST.save) ST.save = { v: 1, stars: {}, cards: [], roster: [], seenIntro: false, act1: false, remind: false, rate: 120 };
+  let idb = null, idbRun = null;
+  try { idb = await idbGet('story'); idbRun = await idbGet('storyRun'); } catch (e) { /* storage unavailable */ }
+  const before = JSON.stringify(ST.save || null);
+  ST.save = mergeSaves([ST.save, idb, lsGet(ST_LS)]);
+  ST.cp = newestCheckpoint([ST.cp, idbRun, lsGet(ST_RUN_LS)], ST.save);
+  if (!Cloud.sync) Cloud.sync = storyCloudSync();
   return ST.save;
 }
-function storySave() { try { idbPut('story', ST.save); } catch (e) { /* storage unavailable */ } }
+// pull the account copy once it is reachable, merge it in, and push the merged copy back to every store
+async function storyCloudSync() {
+  if (!(await cloudInit())) return;
+  const [cs, cr] = await Promise.all([cloudGet('story'), cloudGet('storyrun')]);
+  const prev = JSON.stringify(ST.save) + JSON.stringify(ST.cp && ST.cp.at);
+  ST.save = mergeSaves([ST.save, cs]);
+  ST.cp = newestCheckpoint([ST.cp, cr], ST.save);
+  if (ST.save.at) storyWriteAll();
+  if (ST.cp) stWriteCheckpoint(ST.cp, true); else if (cr) cloudPut('storyrun', null);
+  if (UI.screen === 'storymap' || (UI.screen === 'title' && UI.titleView === 'main')) render();
+  return prev !== JSON.stringify(ST.save) + JSON.stringify(ST.cp && ST.cp.at);
+}
+function storyWriteAll() {
+  const s = ST.save, jobs = [];
+  jobs.push(idbPut('story', s).then(() => true, () => false));
+  const ls = lsPut(ST_LS, s);
+  jobs.push(cloudPut('story', s));
+  return Promise.all(jobs).then(([idb, cloud]) => ({ local: idb || ls, cloud: !!Cloud.db && cloud }));
+}
+function storySave() {
+  if (!ST.save) return Promise.resolve({ local: false, cloud: false });
+  ST.save.at = Date.now();
+  try { return storyWriteAll(); } catch (e) { return Promise.resolve({ local: false, cloud: false }); }
+}
+/* chapter checkpoints */
+function stSnapshot() {
+  const run = ST.run; if (!run || run.state !== 'play') return null;
+  const r = {}; for (const k of Object.keys(run)) if (k !== 'def' && k !== 'res') r[k] = run[k];
+  const snap = JSON.parse(JSON.stringify(r));
+  // a question that was on screen is asked again after loading
+  if (ST.modal && ST.modal.kind === 'upsell') { const c = snap.customers.find(x => x.id === ST.modal.id); if (c) c.asked = false; }
+  return { v: 1, n: run.n, at: Date.now(), served: run.served, money: Math.round(run.money), run: snap };
+}
+function stWriteCheckpoint(cp, cloudNow) {
+  try { idbPut('storyRun', cp).catch(() => {}); } catch (e) { /* storage unavailable */ }
+  lsPut(ST_RUN_LS, cp);
+  if (!Cloud.db) return;
+  clearTimeout(Cloud.cpTimer);
+  const wait = cloudNow ? 0 : Math.max(0, 8000 - (Date.now() - Cloud.cpT));
+  const go = () => { Cloud.cpT = Date.now(); if (ST.cp && ST.cp.at === cp.at) cloudPut('storyrun', cp); };
+  if (wait === 0) go(); else Cloud.cpTimer = setTimeout(go, wait);
+}
+function stCheckpoint(now) {
+  const cp = stSnapshot(); if (!cp) return;
+  ST.cp = cp; stWriteCheckpoint(cp, now);
+}
+// called on every real change in a chapter; a burst of changes becomes one checkpoint
+function stDirty() { clearTimeout(ST.cpTimer); ST.cpTimer = setTimeout(() => stCheckpoint(false), 1200); }
+function stFlush() { if (ST.cpTimer || (ST.run && ST.run.state === 'play')) { clearTimeout(ST.cpTimer); ST.cpTimer = null; stCheckpoint(true); } }
+function stClearCheckpoint() {
+  clearTimeout(ST.cpTimer); ST.cpTimer = null; clearTimeout(Cloud.cpTimer);
+  ST.cp = null;
+  try { idbDel('storyRun').catch(() => {}); } catch (e) { /* storage unavailable */ }
+  lsPut(ST_RUN_LS, null);
+  cloudPut('storyrun', null);
+}
 function storyTotalStars() { return sum(Object.values(ST.save ? ST.save.stars : {})); }
 function chapterUnlocked(n) { return n === 1 || (ST.save.stars[n - 1] || 0) > 0; }
 function storyProgressLabel() {
   if (!ST.save) return 'Act 1 · The Service Drive';
   const done = CHAPTERS.filter(c => (ST.save.stars[c.n] || 0) > 0).length;
+  if (ST.cp && chapterDef(ST.cp.n)) return `Continue chapter ${ST.cp.n} · ${storyTotalStars()}★`;
   return done >= CHAPTERS.length ? `Act 1 complete · ${storyTotalStars()}★` : done ? `Chapter ${done + 1} of ${CHAPTERS.length} · ${storyTotalStars()}★` : 'Start Act 1 · The Service Drive';
 }
 
@@ -188,6 +329,36 @@ function startChapter(n) {
   stFitCamera();
   render();
 }
+// rebuild a chapter from its checkpoint: every car is put back where its state says it belongs
+function stResume() {
+  const cp = ST.cp, def = cp && chapterDef(cp.n); if (!def) return false;
+  const run = JSON.parse(JSON.stringify(cp.run)); run.def = def; run.state = 'play'; run.endT = null;
+  ST.run = run;
+  ST.ents.clear(); ST.floats = []; ST.sig = ''; ST.tip = null; ST.menu = false;
+  stPlaceStaff();
+  run.driveQ = []; run.waitSpots = []; run.seatsUsed = []; run.pickSpots = SM.pick.map(() => null);
+  run.bays.forEach(b => { b.cust = null; });
+  const sit = (c) => { const p = stPerson(c), s = stSeat(c); p.hidden = false; p.gx = s[0]; p.gy = s[1]; };
+  for (const c of run.customers) {
+    if (c.state === 'arriving' || c.state === 'atDrive') { c.state = 'scheduled'; c.at = Math.min(c.at, run.t); continue; }
+    if (c.state === 'waiting') {
+      const wi = clamp(c.wi || 0, 0, SM.waitXs.length - 1); run.waitSpots[wi] = c.id; c.wi = wi;
+      stMakeEnts(c, SM.waitXs[wi], SM.waitY, 'y'); sit(c); continue;
+    }
+    if (['tobay', 'bay', 'bayDone', 'pickup'].includes(c.state) && run.bays[c.bay]) {
+      run.bays[c.bay].cust = c.id;
+      const car = stMakeEnts(c, SM.bayX(c.bay), SM.bayY, 'y'); sit(c);
+      if (c.state === 'tobay') { c.state = 'bay'; c.prog = 0; c.dur = c.hrs * HOUR / run.bays[c.bay].speed; stStartWork(c); }
+      if (c.state === 'pickup') { c.state = 'bay'; c.prog = 1; c.dur = c.dur || 1; }
+      if (c.state === 'bay') car.z = car.zt = 16;
+    }
+  }
+  for (const c of run.customers) if (c.state === 'bayDone') stFinish(c);
+  UI.screen = 'story'; ST.modal = 'resume'; ST.page = 0;
+  stFitCamera();
+  render();
+  return true;
+}
 function stPlaceStaff() {
   const run = ST.run;
   const rosa = { id: 'rosa', type: 'person', gx: 5.4, gy: 8.6, look: stLook('rosa'), path: [], speed: 1.6, walk: 0, role: 'story', face: -1 };
@@ -201,13 +372,18 @@ function stPlaceStaff() {
 /* ---------- entities & movement ---------- */
 function stCar(c) { return ST.ents.get('car-' + c.id); }
 function stPerson(c) { return ST.ents.get('p-' + c.id); }
+function stMakeEnts(c, gx, gy, dir) {
+  const car = { id: 'car-' + c.id, type: 'car', gx, gy, dir, color: c.color, z: 0, zt: 0, path: [], speed: 4.2, alpha: 1, cid: c.id };
+  ST.ents.set(car.id, car);
+  ST.ents.set('p-' + c.id, { id: 'p-' + c.id, type: 'person', gx, gy, look: stLook(c.look), path: [], speed: 1.9, walk: 0, role: 'story', hidden: true, cid: c.id, face: 1 });
+  return car;
+}
 function stSpawn(c) {
   const qi = ST.run.driveQ.length;
   ST.run.driveQ.push(c.id);
-  const car = { id: 'car-' + c.id, type: 'car', gx: -3, gy: SM.laneIn, dir: 'x', color: c.color, z: 0, zt: 0, path: [[SM.driveX, SM.laneIn], [SM.driveX, SM.queueY[qi]]], speed: 4.2, alpha: 1, cid: c.id };
+  const car = stMakeEnts(c, -3, SM.laneIn, 'x');
+  car.path = [[SM.driveX, SM.laneIn], [SM.driveX, SM.queueY[qi]]];
   car.done = () => { c.state = 'atDrive'; const p = stPerson(c); p.hidden = false; p.gx = car.gx + 0.95; p.gy = car.gy + 0.2; if (ST.run.n === 1 && !ST.run.events.firstArrive) { ST.run.events.firstArrive = true; stTip("A customer! Tap their car to write it up.", { hl: [car.gx, car.gy] }); } };
-  ST.ents.set(car.id, car);
-  ST.ents.set('p-' + c.id, { id: 'p-' + c.id, type: 'person', gx: -3, gy: SM.laneIn, look: stLook(c.look), path: [], speed: 1.9, walk: 0, role: 'story', hidden: true, cid: c.id, face: 1 });
   c.state = 'arriving';
 }
 function stQueueShift() {
@@ -273,6 +449,7 @@ function stGiveQuote(id) {
     stSay(c, pick2(["That's too much. I'll try Vic's.", "Vic's is cheaper. No thanks.", "I'll go across the street."]));
     stDecline(c);
   }
+  stDirty();
   render();
 }
 function pick2(a) { return a[Math.floor(Math.random() * a.length)]; }
@@ -310,6 +487,7 @@ function stSendToBay(id) {
   car.done = () => { car.zt = 16; c.state = 'bay'; c.prog = 0; c.dur = c.hrs * HOUR / run.bays[b].speed; stStartWork(c); };
   if (run.n === 1 && !run.events.tipWait) { run.events.tipWait = true; stTip(`${TECHS[run.bays[b].tech].name} is on it. ${c.first} waits in the lounge — don't keep them too long.`); }
   const tech = ST.ents.get('tech-' + run.bays[b].tech); if (tech) tech.path = [[bx + 1.15, SM.bayY + 1.4]];
+  stDirty();
 }
 function stStartWork(c) {
   const run = ST.run;
@@ -337,6 +515,7 @@ function stFinish(c) {
   const p = stPerson(c); stFreeSeat(c);
   p.path = [[SM.lounge.door, 8.0], [SM.lounge.door, 9.2], [px + 0.95, 10.4], [px + 0.95, py + 0.1]];
   p.done = () => { personHere = true; both(); };
+  stDirty();
 }
 function stPay(c) {
   const run = ST.run, q = c.q || stQuote(c);
@@ -359,6 +538,7 @@ function stPay(c) {
   // a car finished in a bay may be waiting for this pickup spot
   const waitingDone = run.customers.find(x => x.state === 'bayDone'); if (waitingDone) stFinish(waitingDone);
   if (run.n === 1 && run.served === 1) stTip('That is a service visit: hours × rate + parts, paid when the car is ready. Two more to go.');
+  stDirty();
   render();
 }
 function stLose(c) {
@@ -378,6 +558,7 @@ function stLose(c) {
   stRemember(c, 1);
   stQueueShift();
   if (!run.events.lostTip) { run.events.lostTip = true; stTip(`We lost ${c.first}. Every car that leaves is money and a customer gone — and they tell their friends.`); }
+  stDirty();
 }
 function stRemember(c, stars) {
   const R = ST.save.roster;
@@ -407,7 +588,7 @@ function storyUpdate(dt) {
   }
   // parts deliveries
   for (const o of run.orders.filter(o => o.eta <= run.t)) {
-    run.stock[o.part] = (run.stock[o.part] || 0) + o.qty;
+    run.stock[o.part] = (run.stock[o.part] || 0) + o.qty; stDirty();
     stFloat(20.2, 10.4, `+${o.qty} ${SPART[o.part].name.toLowerCase()}`, 'info');
   }
   run.orders = run.orders.filter(o => o.eta > run.t);
@@ -440,7 +621,9 @@ function stEndChapter() {
   if (run.res.stars > (s.stars[run.n] || 0)) s.stars[run.n] = run.res.stars;
   if (run.res.stars > 0 && !s.cards.includes(run.def.card)) { s.cards.push(run.def.card); run.res.newCard = true; }
   if (run.def.finale && run.res.stars > 0) s.act1 = true;
-  storySave();
+  stClearCheckpoint();
+  s.endAt = Date.now();
+  storySave().then(r => toast(r.cloud ? 'Progress saved to your Claude account.' : r.local ? 'Progress saved in this browser.' : 'Could not save progress — this browser blocks storage.', r.cloud || r.local ? 'good' : 'bad'));
   ST.modal = run.def.finale ? 'monthend' : 'results';
   render();
 }
@@ -740,6 +923,10 @@ function storyModalHtml() {
     return `<div class="st-sheet st-intro"><div class="st-face-lg">${portrait('rosa', 78)}</div><div class="st-intro-b"><span class="st-k">Chapter ${def.n} · ${esc(def.sub)}</span><h2>${esc(def.title)}</h2><p class="st-line">${esc(line)}</p><p class="st-who">— Rosa, service manager</p>
       <div class="st-actions">${ST.page > 0 ? `<button type="button" class="btn ghost" data-act="stPage" data-val="-1">Back</button>` : '<span></span>'}<button type="button" class="btn primary big" data-act="${last ? 'stBegin' : 'stPage'}" data-val="1">${last ? "Let's open up" : 'Next'}</button></div></div></div>`;
   }
+  if (m === 'resume') {
+    return `<div class="st-sheet st-intro"><div class="st-face-lg">${portrait('rosa', 80)}</div><div class="st-intro-b"><span class="st-k">Chapter ${run.n} · picking up where you left off</span><h2>${esc(run.def.title)}</h2><p class="st-line">“Welcome back. ${run.served ? `${run.served} car${run.served === 1 ? '' : 's'} done so far and ${money(run.money)} in the till.` : `${money(run.money)} in the till.`} The shop is just as you left it.”</p><p class="st-who">— Rosa, service manager</p>
+      <div class="st-actions"><button type="button" class="btn ghost" data-act="stRestart">Start over</button><button type="button" class="btn primary big" data-act="stCloseModal">Back to the shop</button></div></div></div>`;
+  }
   if (m && m.kind === 'writeup') return writeupHtml(stCustomer(m.id));
   if (m && m.kind === 'upsell') return upsellHtml(stCustomer(m.id));
   if (m === 'parts') return partsHtml();
@@ -852,12 +1039,17 @@ function storyMapHtml() {
   const s = ST.save;
   const nodes = CHAPTERS.map(ch => {
     const stars = s.stars[ch.n] || 0, open = chapterUnlocked(ch.n), cur = open && !stars;
-    return `<li class="node ${stars ? 'done' : ''} ${cur ? 'current' : ''} ${open ? '' : 'locked'}"><button type="button" ${open ? `data-act="stPlay" data-val="${ch.n}"` : 'disabled'}><span class="num">${open ? ch.n : icon('key')}</span><span class="nt"><b>${esc(ch.title)}</b><small>${esc(ch.sub)}</small></span><span class="nstars">${[1, 2, 3].map(i => `<i class="${i <= stars ? 'on' : ''}">★</i>`).join('')}</span></button></li>`;
+    return `<li class="node ${stars ? 'cleared' : ''} ${cur ? 'current' : ''} ${open ? '' : 'locked'}"><button type="button" ${open ? `data-act="stPlay" data-val="${ch.n}"` : 'disabled'}><span class="num">${open ? ch.n : icon('key')}</span><span class="nt"><b>${esc(ch.title)}</b><small>${esc(ch.sub)}</small></span><span class="nstars">${[1, 2, 3].map(i => `<i class="${i <= stars ? 'on' : ''}">★</i>`).join('')}</span></button></li>`;
   }).join('');
+  const cp = ST.cp, cdef = cp && chapterDef(cp.n);
+  const contHtml = cdef ? `<button type="button" class="sm-continue" data-act="stResume"><span class="num">${cp.n}</span><span class="nt"><span class="st-k">Continue where you left off</span><b>${esc(cdef.title)}</b><small>${cp.served} served · ${money(cp.money)} cash</small></span><span class="go">${icon('play')}</span></button>` : '';
+  const saved = Cloud.db ? `${icon('check')} Progress is saved to your Claude account` : `${icon('check')} Progress is saved in this browser`;
   return `<div class="sm-screen"><div class="sm-card">
     <header class="sm-h"><button type="button" class="btn ghost" data-act="toTitle">${icon('left')}<span>Menu</span></button><button type="button" class="btn ghost" data-act="stPlaybook">${icon('book')}<span>Playbook ${s.cards.length}/${PLAYBOOK.length}</span></button></header>
     <div class="sm-title"><span class="st-k">Act 1</span><h1>The Service Drive</h1><p>Aunt May left you her dealership. The bank wants proof it can make money. Rosa will teach you how service works before she retires.</p></div>
+    ${contHtml}
     <ol class="sm-path">${nodes}<li class="node locked act2"><button type="button" disabled><span class="num">${icon('car')}</span><span class="nt"><b>Act 2 · The Showroom</b><small>Selling cars — coming next</small></span></button></li></ol>
+    <p class="sm-save">${saved}</p>
   </div></div>`;
 }
 function prologueHtml() {
@@ -888,10 +1080,11 @@ function startDemoScene() {
 }
 const STORY_ACT = {
   storyStart() { storyLoad().then(() => openStoryMap()); return 'skip'; },
-  stPlay(d) { startChapter(+d.val); return 'skip'; },
+  stPlay(d) { if (ST.cp && ST.cp.n === +d.val && stResume()) return 'skip'; startChapter(+d.val); return 'skip'; },
+  stResume() { if (!stResume()) openStoryMap(); return 'skip'; },
   stProPage(d) { ST.page += +d.val; if (ST.page >= 3) { ST.save.seenIntro = true; storySave(); ST.modal = null; ST.page = 0; } if (ST.page < 0) ST.page = 0; },
   stPage(d) { ST.page = Math.max(0, ST.page + +d.val); },
-  stBegin() { ST.modal = null; ST.run.state = 'play'; ST.page = 0; },
+  stBegin() { ST.modal = null; ST.run.state = 'play'; ST.page = 0; stCheckpoint(true); },
   stCloseModal() { ST.modal = null; },
   stQuote(d) { stGiveQuote(d.id); return 'skip'; },
   stUpsell(d) {
@@ -901,10 +1094,11 @@ const STORY_ACT = {
       if (Math.random() < trust) {
         const labour = f.hrs * run.rate; c.extra = { labour, parts: part.price, total: labour + part.price };
         c.dur += f.hrs * HOUR / run.bays[c.bay].speed; run.upsold++;
-        stFloat(stCar(c).gx, stCar(c).gy, `${c.first}: "Yes, do it."`, 'good', 'say');
+        stFloat(stCar(c).gx, stCar(c).gy, `${c.first}: "Yes, do it."`, 'good', 'say'); stDirty();
       } else stFloat(stCar(c).gx, stCar(c).gy, `${c.first}: "Not today, thanks."`, 'info', 'say');
       if (!run.events.upTip) { run.events.upTip = true; stTip('Honest advice. Even when they say no, they remember you told them the truth.'); }
     }
+    stDirty();
   },
   stParts() { ST.modal = 'parts'; },
   stOrder(d) {
@@ -913,13 +1107,14 @@ const STORY_ACT = {
     const pending = run.orders.find(o => o.part === k && o.eta > run.t + 6);
     if (pending) pending.qty++; else run.orders.push({ part: k, qty: 1, eta: run.t + 10 });
     if (!run.events.orderTip) { run.events.orderTip = true; stTip('Ordered. Every box on that shelf is money already spent — stock what you will actually use.'); }
+    stDirty();
   },
-  stRate(d) { const run = ST.run; run.rate = clamp(run.rate + +d.val, 70, 200); ST.save.rate = run.rate; storySave(); renderStoryHud(); return 'skip'; },
+  stRate(d) { const run = ST.run; run.rate = clamp(run.rate + +d.val, 70, 200); ST.save.rate = run.rate; storySave(); stDirty(); renderStoryHud(); return 'skip'; },
   stMenu() { ST.menu = !ST.menu; },
   stTipClose() { ST.tip = null; },
-  stRestart() { const n = ST.run.n; ST.menu = false; startChapter(n); return 'skip'; },
+  stRestart() { const n = ST.run.n; ST.menu = false; stClearCheckpoint(); startChapter(n); return 'skip'; },
   stNext() { startChapter(ST.run.n + 1); return 'skip'; },
-  stMap() { ST.menu = false; ST.run = null; openStoryMap(); return 'skip'; },
+  stMap() { ST.menu = false; if (UI.screen === 'story') stFlush(); ST.run = null; openStoryMap(); return 'skip'; },
   stPlaybook() { ST.menu = false; ST.modal = 'playbook'; },
   stToResults() { ST.modal = 'results'; },
   stActDone() { ST.modal = 'actdone'; },
